@@ -346,7 +346,8 @@ def write_pred_csv(pred_dict, save_file, save_inpaint_mask=False):
         pred_df = pd.DataFrame({'Frame': pred_dict['Frame'],
                                 'Visibility': pred_dict['Visibility'],
                                 'X': pred_dict['X'],
-                                'Y': pred_dict['Y']})
+                                'Y': pred_dict['Y'],
+                                'Inpaint_Mask': pred_dict['Inpaint_Mask']})
     pred_df.to_csv(save_file, index=False)
     
 def convert_gt_to_coco_json(data_dir, split, drop=False):

@@ -49,6 +49,160 @@ def get_ensemble_weight(seq_len, eval_mode):
     
     return weight
 
+def should_reset_track(
+    history,
+    frame_w,
+    frame_h,
+    miss_count=0,
+    border_margin=20,
+    max_stale_miss=2,
+):
+    valid_history = [(x, y) for (x, y, vis) in history if vis == 1]
+
+    # 連續 miss 太多，直接進入 reacquire
+    if miss_count >= max_stale_miss:
+        return True
+
+    if len(valid_history) < 2:
+        return False
+
+    x1, y1 = valid_history[-2]
+    x2, y2 = valid_history[-1]
+    vx, vy = x2 - x1, y2 - y1
+
+    near_border = (
+        x2 < border_margin or x2 > (frame_w - 1 - border_margin) or
+        y2 < border_margin or y2 > (frame_h - 1 - border_margin)
+    )
+
+    moving_outward = (
+        (x2 < border_margin and vx < 0) or
+        (x2 > (frame_w - 1 - border_margin) and vx > 0) or
+        (y2 < border_margin and vy < 0) or
+        (y2 > (frame_h - 1 - border_margin) and vy > 0)
+    )
+
+    return near_border and moving_outward
+
+def predict_location_candidates(heatmap, max_candidates=3, min_area=1):
+    """
+    從 heatmap 取出多個候選框，依 area 由大到小排序。
+    Returns:
+        List[dict]: [{
+            "x": int, "y": int, "w": int, "h": int,
+            "cx": float, "cy": float,
+            "area": float,
+        }]
+    """
+    if np.amax(heatmap) == 0:
+        return []
+
+    (cnts, _) = cv2.findContours(heatmap.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+    candidates = []
+    for ctr in cnts:
+        x, y, w, h = cv2.boundingRect(ctr)
+        area = w * h
+        if area < min_area:
+            continue
+        candidates.append({
+            "x": x, "y": y, "w": w, "h": h,
+            "cx": x + w / 2.0,
+            "cy": y + h / 2.0,
+            "area": float(area),
+        })
+
+    candidates.sort(key=lambda c: c["area"], reverse=True)
+    return candidates[:max_candidates]
+
+
+def select_best_candidate(
+    candidates,
+    history,
+    miss_count=0,
+    max_dist_to_pred=140.0,
+    max_dist_to_last=180.0,
+    area_bonus_weight=0.10,
+    min_area_no_history=6.0,
+    min_area_with_history=4.0,
+    reject_score=85.0,
+    allow_reacquire=False,
+    frame_w=None,
+    frame_h=None,
+):
+    if len(candidates) == 0:
+        return None
+
+    valid_history = [(x, y) for (x, y, vis) in history if vis == 1]
+
+    # reacquire mode：不要被舊球綁住，但也不要只拿最大 area
+    if allow_reacquire or len(valid_history) == 0:
+        scored = []
+        for c in candidates:
+            area = c["area"]
+            if area < min_area_no_history:
+                continue
+
+            score = -0.2 * area
+
+            if frame_w is not None and frame_h is not None:
+                center_dx = abs(c["cx"] - frame_w / 2.0)
+                center_dy = abs(c["cy"] - frame_h / 2.0)
+                score += 0.002 * (center_dx + center_dy)
+
+            scored.append((score, c))
+
+        if len(scored) == 0:
+            return None
+
+        scored.sort(key=lambda x: x[0])
+        return scored[0][1]
+
+    last_x, last_y = valid_history[-1]
+
+    if len(valid_history) >= 2:
+        x1, y1 = valid_history[-2]
+        x2, y2 = valid_history[-1]
+        pred_x = x2 + (x2 - x1)
+        pred_y = y2 + (y2 - y1)
+    else:
+        pred_x, pred_y = last_x, last_y
+
+    dist_scale = 1.0 + min(miss_count, 5) * 0.12
+    cur_max_dist_to_pred = max_dist_to_pred * dist_scale
+    cur_max_dist_to_last = max_dist_to_last * dist_scale
+
+    scored = []
+    for c in candidates:
+        cx, cy = c["cx"], c["cy"]
+        area = c["area"]
+
+        if area < min_area_with_history:
+            continue
+
+        dist_to_last = math.hypot(cx - last_x, cy - last_y)
+        dist_to_pred = math.hypot(cx - pred_x, cy - pred_y)
+
+        if dist_to_last > cur_max_dist_to_last:
+            continue
+        if dist_to_pred > cur_max_dist_to_pred:
+            continue
+
+        score = 0.7 * dist_to_pred + 0.3 * dist_to_last
+        score -= area_bonus_weight * area
+        scored.append((score, c))
+
+    if len(scored) == 0:
+        return None
+
+    scored.sort(key=lambda x: x[0])
+    best_score, best_c = scored[0]
+
+    if best_score > reject_score:
+        return None
+
+    return best_c
+
 def predict_location(heatmap):
     """ Get coordinates from the heatmap.
 
@@ -516,6 +670,7 @@ def generate_inpaint_mask(
 
     return mask.tolist()
 '''
+'''
 def generate_inpaint_mask(
     pred_dict,
     frame_w,
@@ -568,7 +723,147 @@ def generate_inpaint_mask(
         mask[gt_vis == 0] = 0
 
     return mask.tolist()
+'''
+def generate_inpaint_mask(
+    pred_dict,
+    frame_w,
+    frame_h,
+    max_gap=8,
+    border_margin_x=150,
+    max_angle_diff=100.0,
+    min_valid_run=1,
+    angle_check_min_gap=4,
+):
+    """
+    給高速球用的較寬鬆版本：
+    - 只補中間短洞
+    - 只看左右邊界，不看上下
+    - 短 gap 不用 jump / avg_step 擋
+    - angle 只對較長 gap 檢查
+    """
 
+    x = np.asarray(pred_dict["X"], dtype=float)
+    y = np.asarray(pred_dict["Y"], dtype=float)
+    vis = np.asarray(pred_dict["Visibility"], dtype=int)
+
+    n = len(vis)
+    mask = np.zeros(n, dtype=int)
+
+    def near_border(px, py):
+        return (
+            px < border_margin_x or px > (frame_w - 1 - border_margin_x)
+        )
+
+    def find_prev_visible(idx):
+        k = idx
+        while k >= 0 and vis[k] == 0:
+            k -= 1
+        return k
+
+    def find_next_visible(idx):
+        k = idx
+        while k < n and vis[k] == 0:
+            k += 1
+        return k
+
+    def count_visible_backward(idx, limit=10):
+        cnt = 0
+        k = idx
+        while k >= 0 and cnt < limit:
+            if vis[k] == 1:
+                cnt += 1
+            else:
+                break
+            k -= 1
+        return cnt
+
+    def count_visible_forward(idx, limit=10):
+        cnt = 0
+        k = idx
+        while k < n and cnt < limit:
+            if vis[k] == 1:
+                cnt += 1
+            else:
+                break
+            k += 1
+        return cnt
+
+    def vec_angle_deg(v1, v2):
+        n1 = np.linalg.norm(v1)
+        n2 = np.linalg.norm(v2)
+        if n1 < 1e-6 or n2 < 1e-6:
+            return 0.0
+        c = np.dot(v1, v2) / (n1 * n2)
+        c = np.clip(c, -1.0, 1.0)
+        return float(np.degrees(np.arccos(c)))
+
+    i = 0
+    while i < n:
+        if vis[i] == 1:
+            i += 1
+            continue
+
+        start = i
+        while i < n and vis[i] == 0:
+            i += 1
+        end = i  # gap = [start, end)
+
+        gap_len = end - start
+
+        # (1) prefix / suffix 不補
+        if start == 0 or end == n:
+            continue
+
+        # (2) 只補短洞
+        if gap_len > max_gap:
+            continue
+
+        prev_idx = find_prev_visible(start - 1)
+        next_idx = find_next_visible(end)
+
+        if prev_idx < 0 or next_idx >= n:
+            continue
+
+        # (3) 只檢查左右邊界
+        if near_border(x[prev_idx], y[prev_idx]) or near_border(x[next_idx], y[next_idx]):
+            continue
+
+        # (4) gap 前後至少各有 1 個可見點即可
+        if count_visible_backward(prev_idx) < min_valid_run:
+            continue
+        if count_visible_forward(next_idx) < min_valid_run:
+            continue
+
+        # (5) 短 gap 直接補，不做 angle 檢查
+        if gap_len < angle_check_min_gap:
+            mask[start:end] = 1
+            continue
+
+        # (6) 較長 gap 才檢查方向連續性
+        prev2_idx = find_prev_visible(prev_idx - 1)
+        next2_idx = find_next_visible(next_idx + 1)
+
+        if prev2_idx >= 0 and next2_idx < n:
+            v_before = np.array(
+                [x[prev_idx] - x[prev2_idx], y[prev_idx] - y[prev2_idx]],
+                dtype=float
+            )
+            v_after = np.array(
+                [x[next2_idx] - x[next_idx], y[next2_idx] - y[next_idx]],
+                dtype=float
+            )
+
+            angle_diff = vec_angle_deg(v_before, v_after)
+            if angle_diff > max_angle_diff:
+                continue
+
+        mask[start:end] = 1
+
+    if "Visibility_GT" in pred_dict:
+        gt_vis = np.asarray(pred_dict["Visibility_GT"], dtype=int)
+        mask[gt_vis == 0] = 0
+
+    return mask.tolist()
 
 def linear_interp(target, inpaint_mask):
     assert len(target) == len(inpaint_mask), 'Length of target and inpaint_mask should be the same'
@@ -1009,8 +1304,11 @@ def test_rally(model, rally_dir, param_dict, save_inpaint_mask=False):
             tracknet_pred_dict,
             frame_w=w,
             frame_h=h,
-            max_gap=12,        
-            border_margin=12,
+            max_gap=8,
+            border_margin=200,
+            max_jump_dist=800.0,
+            max_angle_diff=80.0,
+            min_valid_run=2,
         )
         return tracknet_pred_dict
     else:

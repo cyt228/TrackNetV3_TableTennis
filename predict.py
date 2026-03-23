@@ -11,7 +11,7 @@ from tqdm import tqdm
 import torch
 from torch.utils.data import DataLoader
 
-from test import predict_location, get_ensemble_weight, generate_inpaint_mask
+from test import predict_location, get_ensemble_weight, generate_inpaint_mask, predict_location_candidates, select_best_candidate,should_reset_track
 from dataset import Shuttlecock_Trajectory_Dataset, Video_IterableDataset
 from utils.general import *
 
@@ -24,7 +24,7 @@ def collect_video_files(video_dir):
     video_files.sort()
     return video_files
 
-def predict(indices, y_pred=None, c_pred=None, img_scaler=(1, 1)):
+def predict(indices, y_pred=None, c_pred=None, img_scaler=(1, 1), track_state=None):
     """ Predict coordinates from heatmap or inpainted coordinates. 
 
         Args:
@@ -37,6 +37,17 @@ def predict(indices, y_pred=None, c_pred=None, img_scaler=(1, 1)):
             pred_dict (Dict): dictionary of predicted coordinates
                 Format: {'Frame':[], 'X':[], 'Y':[], 'Visibility':[]}
     """
+
+    if track_state is None:
+        track_state = {
+            "history": [],
+            "miss_count": 0,
+        }
+
+    MAX_CANDIDATES = 3
+    MAX_DIST_TO_PRED = 140.0
+    MAX_DIST_TO_LAST = 180.0
+    HISTORY_SIZE = 8
 
     pred_dict = {'Frame':[], 'X':[], 'Y':[], 'Visibility':[]}
 
@@ -63,11 +74,67 @@ def predict(indices, y_pred=None, c_pred=None, img_scaler=(1, 1)):
                     c_p = c_pred[n][f]
                     cx_pred, cy_pred = int(c_p[0] * WIDTH * img_scaler[0]), int(c_p[1] * HEIGHT* img_scaler[1]) 
                 elif y_pred is not None:
-                    # Predict from heatmap
+                    # Predict from heatmap with multi-candidate selection + reset / reacquire
                     y_p = y_pred[n][f]
-                    bbox_pred = predict_location(to_img(y_p))
-                    cx_pred, cy_pred = int(bbox_pred[0]+bbox_pred[2]/2), int(bbox_pred[1]+bbox_pred[3]/2)
-                    cx_pred, cy_pred = int(cx_pred*img_scaler[0]), int(cy_pred*img_scaler[1])
+                    heatmap = to_img(y_p)
+
+                    candidates = predict_location_candidates(
+                        heatmap,
+                        max_candidates=MAX_CANDIDATES,
+                    )
+
+                    # heatmap 座標候選轉成原圖座標
+                    scaled_candidates = []
+                    for c in candidates:
+                        scaled_candidates.append({
+                            "x": int(c["x"] * img_scaler[0]),
+                            "y": int(c["y"] * img_scaler[1]),
+                            "w": int(c["w"] * img_scaler[0]),
+                            "h": int(c["h"] * img_scaler[1]),
+                            "cx": c["cx"] * img_scaler[0],
+                            "cy": c["cy"] * img_scaler[1],
+                            "area": c["area"],
+                        })
+
+                    frame_w = int(WIDTH * img_scaler[0])
+                    frame_h = int(HEIGHT * img_scaler[1])
+
+                    allow_reacquire = False
+
+                    # 若上一顆球已經接近邊界且往外移動，表示這條 track 應該結束
+                    if should_reset_track(
+                        track_state["history"],
+                        frame_w=frame_w,
+                        frame_h=frame_h,
+                        miss_count=track_state["miss_count"],
+                        border_margin=20,
+                        max_stale_miss=2,
+                    ):
+                        track_state["history"] = []
+                        track_state["miss_count"] = 0
+                        allow_reacquire = True
+
+                    chosen = select_best_candidate(
+                        candidates=scaled_candidates,
+                        history=track_state["history"],
+                        miss_count=track_state["miss_count"],
+                        max_dist_to_pred=MAX_DIST_TO_PRED,
+                        max_dist_to_last=MAX_DIST_TO_LAST,
+                        allow_reacquire=allow_reacquire,
+                    )
+
+                    if chosen is None:
+                        cx_pred, cy_pred = 0, 0
+                        track_state["miss_count"] += 1
+                        track_state["history"].append((0, 0, 0))
+                    else:
+                        cx_pred = int(chosen["cx"])
+                        cy_pred = int(chosen["cy"])
+                        track_state["miss_count"] = 0
+                        track_state["history"].append((cx_pred, cy_pred, 1))
+
+                    if len(track_state["history"]) > HISTORY_SIZE:
+                        track_state["history"] = track_state["history"][-HISTORY_SIZE:]
                 else:
                     raise ValueError('Invalid input')
                 vis_pred = 0 if cx_pred == 0 and cy_pred == 0 else 1
@@ -79,7 +146,7 @@ def predict(indices, y_pred=None, c_pred=None, img_scaler=(1, 1)):
             else:
                 break
     
-    return pred_dict    
+    return pred_dict, track_state 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -168,6 +235,10 @@ if __name__ == '__main__':
 
         tracknet_pred_dict = {'Frame':[], 'X':[], 'Y':[], 'Visibility':[], 'Inpaint_Mask':[],
                             'Img_scaler': (w_scaler, h_scaler), 'Img_shape': (w, h)}
+        track_state = {
+            "history": [],
+            "miss_count": 0,
+        }
 
         # Test on TrackNet
         tracknet.eval()
@@ -196,7 +267,12 @@ if __name__ == '__main__':
                     y_pred = tracknet(x).detach().cpu()
 
                 # Predict
-                tmp_pred = predict(i, y_pred=y_pred, img_scaler=img_scaler)
+                tmp_pred, track_state = predict(
+                    i,
+                    y_pred=y_pred,
+                    img_scaler=img_scaler,
+                    track_state=track_state,
+                )
                 for key in tmp_pred.keys():
                     tracknet_pred_dict[key].extend(tmp_pred[key])
         else:
@@ -260,7 +336,7 @@ if __name__ == '__main__':
                             ensemble_y_pred = torch.cat((ensemble_y_pred, y_pred.reshape(1, 1, HEIGHT, WIDTH)), dim=0)
 
                 # Predict
-                tmp_pred = predict(ensemble_i, y_pred=ensemble_y_pred, img_scaler=img_scaler)
+                tmp_pred, track_state  = predict(ensemble_i, y_pred=ensemble_y_pred, img_scaler=img_scaler,track_state=track_state)
                 for key in tmp_pred.keys():
                     tracknet_pred_dict[key].extend(tmp_pred[key])
 
@@ -272,12 +348,22 @@ if __name__ == '__main__':
         if inpaintnet is not None:
             inpaintnet.eval()
             seq_len = inpaintnet_seq_len
-            tracknet_pred_dict['Inpaint_Mask'] = generate_inpaint_mask(
+            '''tracknet_pred_dict['Inpaint_Mask'] = generate_inpaint_mask(
                 tracknet_pred_dict,
                 frame_w=w,
                 frame_h=h,
                 max_gap=12,        
                 border_margin=12,
+            )'''
+            tracknet_pred_dict['Inpaint_Mask'] = generate_inpaint_mask(
+                tracknet_pred_dict,
+                frame_w=w,
+                frame_h=h,
+                max_gap=10,
+                border_margin_x=160,
+                max_angle_diff=100.0,
+                min_valid_run=1,
+                angle_check_min_gap=8,
             )
 
             inpaint_pred_dict = {'Frame':[], 'X':[], 'Y':[], 'Visibility':[]}
@@ -298,7 +384,7 @@ if __name__ == '__main__':
                     coor_inpaint[th_mask] = 0.
                     
                     # Predict
-                    tmp_pred = predict(i, c_pred=coor_inpaint, img_scaler=img_scaler)
+                    tmp_pred,_  = predict(i, c_pred=coor_inpaint, img_scaler=img_scaler,)
                     for key in tmp_pred.keys():
                         inpaint_pred_dict[key].extend(tmp_pred[key])
                     
@@ -359,7 +445,7 @@ if __name__ == '__main__':
                     ensemble_coor_inpaint[th_mask] = 0.
 
                     # Predict
-                    tmp_pred = predict(ensemble_i, c_pred=ensemble_coor_inpaint, img_scaler=img_scaler)
+                    tmp_pred, _  = predict(ensemble_i, c_pred=ensemble_coor_inpaint, img_scaler=img_scaler)
                     for key in tmp_pred.keys():
                         inpaint_pred_dict[key].extend(tmp_pred[key])
                     
@@ -369,6 +455,13 @@ if __name__ == '__main__':
 
         # Write csv file
         pred_dict = inpaint_pred_dict if inpaintnet is not None else tracknet_pred_dict
+
+        if 'Inpaint_Mask' not in pred_dict:
+            if 'Inpaint_Mask' in tracknet_pred_dict:
+                pred_dict['Inpaint_Mask'] = tracknet_pred_dict['Inpaint_Mask']
+            else:
+                pred_dict['Inpaint_Mask'] = [0] * len(pred_dict['Frame'])
+
         write_pred_csv(pred_dict, save_file=out_csv_file)
 
         # Write video with predicted coordinates
