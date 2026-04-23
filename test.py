@@ -53,26 +53,41 @@ def should_reset_track(
     history,
     frame_w,
     frame_h,
-    miss_count=0,
-    border_margin=20,
-    max_stale_miss=2,
+    miss_count=0,   # 保留介面，但不再拿來直接 reset
+    border_margin=40,
+    max_stale_miss=2,   # 保留介面，不使用
+    stale_frames=6,
+    stale_avg_step_thresh=6.5,
+    stale_y_span_thresh=12.0,
+    stale_x_span_thresh=35.0,
+    debug=False,
 ):
+    """
+    Returns:
+        need_reset (bool)
+        reset_reason (str | None)
+            - "border_out"
+            - "stale_ball"
+            - None
+    """
     valid_history = [(x, y) for (x, y, vis) in history if vis == 1]
 
-    # 連續 miss 太多，直接進入 reacquire
-    if miss_count >= max_stale_miss:
-        return True
-
+    # 沒有足夠 valid history，就不要 reset
     if len(valid_history) < 2:
-        return False
+        return False, None
 
+    # --------------------------------------------------
+    # 1) 明確出畫面：靠近邊界且往外移動
+    # --------------------------------------------------
     x1, y1 = valid_history[-2]
     x2, y2 = valid_history[-1]
     vx, vy = x2 - x1, y2 - y1
 
     near_border = (
-        x2 < border_margin or x2 > (frame_w - 1 - border_margin) or
-        y2 < border_margin or y2 > (frame_h - 1 - border_margin)
+        x2 < border_margin or
+        x2 > (frame_w - 1 - border_margin) or
+        y2 < border_margin or
+        y2 > (frame_h - 1 - border_margin)
     )
 
     moving_outward = (
@@ -82,7 +97,48 @@ def should_reset_track(
         (y2 > (frame_h - 1 - border_margin) and vy > 0)
     )
 
-    return near_border and moving_outward
+    if near_border and moving_outward:
+        if debug:
+            print("[reset] near border and moving outward -> reset")
+        return True, "border_out"
+
+    # --------------------------------------------------
+    # 2) 殘留慢速球：最近幾幀幾乎停住
+    # --------------------------------------------------
+    if len(valid_history) >= stale_frames:
+        recent = valid_history[-stale_frames:]
+
+        xs = [p[0] for p in recent]
+        ys = [p[1] for p in recent]
+
+        x_span = max(xs) - min(xs)
+        y_span = max(ys) - min(ys)
+
+        step_dists = []
+        for i in range(1, len(recent)):
+            dx = recent[i][0] - recent[i - 1][0]
+            dy = recent[i][1] - recent[i - 1][1]
+            step_dists.append(math.hypot(dx, dy))
+
+        avg_step = sum(step_dists) / max(len(step_dists), 1)
+
+        last_x, last_y = recent[-1]
+
+        if (
+            avg_step <= stale_avg_step_thresh and
+            y_span <= stale_y_span_thresh and
+            x_span <= stale_x_span_thresh
+        ):
+            if debug:
+                print(
+                    f"[reset] stale rolling ball -> reset "
+                    f"(avg_step={avg_step:.2f}, "
+                    f"x_span={x_span:.2f}, y_span={y_span:.2f}, "
+                    f"last=({last_x},{last_y}))"
+                )
+            return True, "stale_ball"
+
+    return False, None
 
 def predict_location_candidates(heatmap, max_candidates=3, min_area=1):
     """
@@ -120,88 +176,230 @@ def select_best_candidate(
     candidates,
     history,
     miss_count=0,
-    max_dist_to_pred=140.0,
-    max_dist_to_last=180.0,
-    area_bonus_weight=0.10,
+    max_dist_to_pred=140.0,   # 保留介面，不當主要判斷
+    max_dist_to_last=180.0,   # 保留介面，不當主要判斷
+    area_bonus_weight=0.10,   # 保留介面，不使用
     min_area_no_history=6.0,
-    min_area_with_history=4.0,
-    reject_score=85.0,
-    allow_reacquire=False,
+    min_area_with_history=2.0,
+    reject_score=85.0,        # 保留介面，不使用
+    allow_reacquire=False,    # 保留介面，不使用
     frame_w=None,
     frame_h=None,
+    min_y=350,
+    max_y=900,
+    frame_idx=None,  # for debug
+    debug_start=4485,
+    debug_end=4500,
 ):
-    if len(candidates) == 0:
+    debug_on = (
+        frame_idx is not None and
+        debug_start <= frame_idx <= debug_end
+    )
+
+    if debug_on:
+        print("\n" + "=" * 80)
+        print(
+            f"[select] frame={frame_idx}, miss_count={miss_count}, "
+            f"raw_candidates={len(candidates)}"
+        )
+
+    if not candidates:
+        if debug_on:
+            print("[select] no candidates -> return None")
+        return None
+
+    # --------------------------------------------------
+    # 1) 基本過濾：只保留合理 y 範圍
+    # --------------------------------------------------
+    candidates = [c for c in candidates if min_y <= c["cy"] <= max_y]
+
+    if debug_on:
+        print(f"[select] after_y_filter={len(candidates)}")
+        for i, c in enumerate(candidates):
+            print(
+                f"  [cand {i}] cx={c['cx']}, cy={c['cy']}, area={c['area']}"
+            )
+
+    if not candidates:
+        if debug_on:
+            print("[select] no candidates after y filter -> return None")
         return None
 
     valid_history = [(x, y) for (x, y, vis) in history if vis == 1]
 
-    # reacquire mode：不要被舊球綁住，但也不要只拿最大 area
-    if allow_reacquire or len(valid_history) == 0:
-        scored = []
-        for c in candidates:
+    if debug_on:
+        print(f"[select] valid_history_len={len(valid_history)}")
+        if len(valid_history) > 0:
+            print(f"[select] last_valid={valid_history[-1]}")
+        if len(valid_history) > 1:
+            print(f"[select] prev_valid={valid_history[-2]}")
+
+    # --------------------------------------------------
+    # 2) 沒有 history：就是新段，直接用 no-history 挑法
+    # --------------------------------------------------
+    if not valid_history:
+        valid_candidates = []
+        for i, c in enumerate(candidates):
             area = c["area"]
             if area < min_area_no_history:
+                if debug_on:
+                    print(f"  [cand {i}] reject: area too small")
                 continue
+            valid_candidates.append(c)
 
-            score = -0.2 * area
-
-            if frame_w is not None and frame_h is not None:
-                center_dx = abs(c["cx"] - frame_w / 2.0)
-                center_dy = abs(c["cy"] - frame_h / 2.0)
-                score += 0.002 * (center_dx + center_dy)
-
-            scored.append((score, c))
-
-        if len(scored) == 0:
+        if not valid_candidates:
+            if debug_on:
+                print("[select] no valid candidate -> return None")
             return None
 
-        scored.sort(key=lambda x: x[0])
-        return scored[0][1]
+        # 不再偏畫面中心，直接選 area 最大
+        best_c = max(valid_candidates, key=lambda c: c["area"])
 
+        if debug_on:
+            print(
+                f"[select] best(no_history)=({best_c['cx']},{best_c['cy']}), "
+                f"area={best_c['area']:.2f}"
+            )
+        return best_c
+
+    # --------------------------------------------------
+    # 3) 有 history：一律當作同一顆球延續
+    # miss_count 只用來放寬 x gap，不再切模式
+    # --------------------------------------------------
     last_x, last_y = valid_history[-1]
 
     if len(valid_history) >= 2:
-        x1, y1 = valid_history[-2]
-        x2, y2 = valid_history[-1]
-        pred_x = x2 + (x2 - x1)
-        pred_y = y2 + (y2 - y1)
+        prev_x, prev_y = valid_history[-2]
+        hist_dx = last_x - prev_x
+        hist_dy = last_y - prev_y
     else:
-        pred_x, pred_y = last_x, last_y
+        hist_dx = 0.0
+        hist_dy = 0.0
 
-    dist_scale = 1.0 + min(miss_count, 5) * 0.12
-    cur_max_dist_to_pred = max_dist_to_pred * dist_scale
-    cur_max_dist_to_last = max_dist_to_last * dist_scale
+    if debug_on:
+        print(
+            f"[select] last_x={last_x}, last_y={last_y}, hist_dx={hist_dx:.2f}"
+        )
 
-    scored = []
-    for c in candidates:
+    valid_candidates = []
+
+    # miss 越多，只放寬 x 門檻；不切成另一套邏輯
+    if miss_count == 0:
+        max_x_gap = 130.0
+    elif miss_count <= 3:
+        max_x_gap = 350.0
+    else:
+        max_x_gap = 550
+
+    for i, c in enumerate(candidates):
         cx, cy = c["cx"], c["cy"]
         area = c["area"]
 
         if area < min_area_with_history:
+            if debug_on:
+                print(
+                    f"  [cand {i}] reject: area {area:.2f} < {min_area_with_history:.2f}"
+                )
             continue
 
-        dist_to_last = math.hypot(cx - last_x, cy - last_y)
-        dist_to_pred = math.hypot(cx - pred_x, cy - pred_y)
+        dx = cx - last_x
+        x_to_last = abs(dx)
+        y_to_last = abs(cy - last_y)
 
-        if dist_to_last > cur_max_dist_to_last:
+        pred_x = last_x + hist_dx
+        pred_y = last_y + hist_dy
+        x_to_pred = abs(cx - pred_x)
+        y_to_pred = abs(cy - pred_y)
+
+        if y_to_last > 100:
+            if debug_on:
+                print(
+                    f"  [cand {i}] reject: y gap too large "
+                    f"(y_to_last={y_to_last:.2f})"
+                )
             continue
-        if dist_to_pred > cur_max_dist_to_pred:
+
+        # 核心：前一顆差太遠就不要選
+        if x_to_last > max_x_gap:
+            if debug_on:
+                print(
+                    f"  [cand {i}] reject: x gap too large "
+                    f"(x_to_last={x_to_last:.2f}, max_x_gap={max_x_gap:.2f})"
+                )
             continue
 
-        score = 0.7 * dist_to_pred + 0.3 * dist_to_last
-        score -= area_bonus_weight * area
-        scored.append((score, c))
+        # 方向一致性只在完全連續追蹤時才用
+        # miss 後不要太早把正確候選擋掉
+        if len(valid_history) >= 2 and miss_count == 0:
+            if hist_dx > 12 and dx < -12:
+                if debug_on:
+                    print(
+                        f"  [cand {i}] reject: opposite x direction "
+                        f"(hist_dx={hist_dx:.2f}, cand_dx={dx:.2f})"
+                    )
+                continue
 
-    if len(scored) == 0:
+            if hist_dx < -12 and dx > 12:
+                if debug_on:
+                    print(
+                        f"  [cand {i}] reject: opposite x direction "
+                        f"(hist_dx={hist_dx:.2f}, cand_dx={dx:.2f})"
+                    )
+                continue
+
+        # 交會保護：連續追蹤時，候選要接近預測軌跡
+        if len(valid_history) >= 2 and miss_count == 0:
+            if x_to_pred > 120 or y_to_pred > 80:
+                if debug_on:
+                    print(
+                        f"  [cand {i}] reject: too far from predicted path "
+                        f"(x_to_pred={x_to_pred:.2f}, y_to_pred={y_to_pred:.2f})"
+                    )
+                continue
+
+        valid_candidates.append({
+            "cand": c,
+            "x_to_last": x_to_last,
+            "x_to_pred": x_to_pred if len(valid_history) >= 2 else None,
+            "y_to_pred": y_to_pred if len(valid_history) >= 2 else None,
+            "area": area,
+        })
+
+        if debug_on:
+            print(
+                f"  [cand {i}] keep: cx={cx}, cy={cy}, area={area:.2f}, "
+                f"x_to_last={x_to_last:.2f}"
+            )
+
+    if not valid_candidates:
+        if debug_on:
+            print("[select] no valid candidate -> return None")
         return None
 
-    scored.sort(key=lambda x: x[0])
-    best_score, best_c = scored[0]
+    # --------------------------------------------------
+    # 4) 最後只在通過條件的候選中挑最近那顆
+    # --------------------------------------------------
+    best = min(
+        valid_candidates,
+        key=lambda item: (
+            item["x_to_pred"] if item["x_to_pred"] is not None else item["x_to_last"],
+            item["y_to_pred"] if item["y_to_pred"] is not None else 9999,
+            item["x_to_last"],
+            -item["area"],
+        )
+    )
 
-    if best_score > reject_score:
-        return None
+    best_c = best["cand"]
+
+    if debug_on:
+        print(
+            f"[select] best=({best_c['cx']},{best_c['cy']}), "
+            f"x_last={best['x_to_last']:.2f}, "
+            f"area={best['area']:.2f}"
+        )
 
     return best_c
+
 
 def predict_location(heatmap):
     """ Get coordinates from the heatmap.
@@ -374,356 +572,7 @@ def evaluate(indices, y_true=None, y_pred=None, c_true=None, c_pred=None, tolera
     
     return pred_dict
 
-'''def generate_inpaint_mask(pred_dict, th_h=30):
-    """ Generate inpaint mask form predicted trajectory.
 
-        Args:
-            pred_dict (Dict): Prediction result
-                Format: {'Frame':[], 'X':[], 'Y':[], 'Visibility':[]}
-            th_h (float): Height threshold (pixels) for y coordinate
-        
-        Returns:
-            inpaint_mask (List): Inpaint mask
-    """
-    y = np.array(pred_dict['Y'])
-    vis_pred = np.array(pred_dict['Visibility'])
-    inpaint_mask = np.zeros_like(y)
-    i = 0 # index that ball start to disappear
-    j = 0 # index that ball start to appear
-    threshold = th_h
-    while j < len(vis_pred):
-        while i < len(vis_pred)-1 and vis_pred[i] == 1:
-            i += 1
-        j = i
-        while j < len(vis_pred)-1 and vis_pred[j] == 0:
-            j += 1
-        if j == i:
-            break
-        elif i == 0 and y[j] > threshold:
-            # start from the first frame that ball disappear
-            inpaint_mask[:j] = 1
-        elif (i > 1 and y[i-1] > threshold) and (j < len(vis_pred) and y[j] > threshold):
-            inpaint_mask[i:j] = 1
-        else:
-            # ball is out of the field of camera view 
-            pass
-        i = j
-    
-    # add 
-    if 'Visibility_GT' in pred_dict:
-        gt_vis = np.array(pred_dict['Visibility_GT'])
-        inpaint_mask[gt_vis == 0] = 0
-
-    return inpaint_mask.tolist()    
-'''
-'''
-def generate_inpaint_mask(
-    pred_dict,
-    fps,
-    frame_w,
-    frame_h,
-    max_gap_sec=0.06,              
-    border_margin_ratio=0.03,
-    #max_speed_px_per_sec=14000.0,  
-    #max_acc_px_per_sec2=2.0e6,
-    lookback_sec=0.03,
-):
-    x = np.array(pred_dict['X'], dtype=np.float32)
-    y = np.array(pred_dict['Y'], dtype=np.float32)
-    vis = np.array(pred_dict['Visibility'], dtype=np.int32)
-
-    n = len(vis)
-    mask = np.zeros(n, dtype=np.int32)
-
-    fps = float(fps) if fps and fps > 1e-3 else 60.0
-
-    max_gap = int(max(1, round(max_gap_sec * fps)))
-    lookback = int(max(1, round(lookback_sec * fps)))
-
-    border_margin = int(min(frame_w, frame_h) * border_margin_ratio)
-
-    #max_speed = max_speed_px_per_sec / fps
-    #max_acc = max_acc_px_per_sec2 / (fps * fps)
-
-    def near_border(px, py):
-        return (px < border_margin) or (px > frame_w - 1 - border_margin) or (py < border_margin) or (py > frame_h - 1 - border_margin)
-
-    def outward_velocity(px, py, vx, vy):
-        out = False
-        if px < border_margin and vx < 0: out = True
-        if px > frame_w - 1 - border_margin and vx > 0: out = True
-        if py < border_margin and vy < 0: out = True
-        if py > frame_h - 1 - border_margin and vy > 0: out = True
-        return out
-
-    def get_prev_visible_idx(idx, back):
-        k0 = max(0, idx - back)
-        k = idx
-        while k > k0 and vis[k-1] == 0:
-            k -= 1
-        return k-1 if (k-1 >= 0 and vis[k-1] == 1) else None
-
-    i = 0
-    while i < n:
-        if vis[i] == 1:
-            i += 1
-            continue
-
-        j = i
-        while j < n and vis[j] == 0:
-            j += 1
-        gap_len = j - i
-
-        if gap_len > max_gap:
-            i = j
-            continue
-
-        if i == 0 or j >= n:
-            i = j
-            continue
-
-        pL = np.array([x[i-1], y[i-1]], dtype=np.float32)
-        pR = np.array([x[j],   y[j]], dtype=np.float32)
-
-        prev_idx = get_prev_visible_idx(i-1, lookback)
-        if prev_idx is not None:
-            vL = np.array([x[i-1] - x[prev_idx], y[i-1] - y[prev_idx]], dtype=np.float32) / float((i-1) - prev_idx)
-        else:
-            vL = np.array([0.0, 0.0], dtype=np.float32)
-
-        # 出視窗：靠邊界 + 速度朝外
-        if near_border(pL[0], pL[1]) and outward_velocity(pL[0], pL[1], vL[0], vL[1]):
-            i = j
-            continue
-
-        # 端點跨 gap 的平均速度
-        v_gap = (pR - pL) / float(gap_len + 1)
-        speed = float(np.linalg.norm(v_gap))
-        if speed > max_speed:
-            i = j
-            continue
-
-        # 加速度突變
-        acc = float(np.linalg.norm(v_gap - vL))
-        if acc > max_acc:
-            i = j
-            continue
-        
-        mask[i:j] = 1
-        i = j
-
-    if 'Visibility_GT' in pred_dict:
-        gt_vis = np.array(pred_dict['Visibility_GT'], dtype=np.int32)
-        mask[gt_vis == 0] = 0
-
-    return mask.tolist()
-'''
-
-'''
-def generate_inpaint_mask(
-    pred_dict,
-    fps,
-    frame_w,
-    frame_h,
-    max_gap_sec,
-    border_margin_ratio,
-    # max_speed_px_per_sec=14000.0,
-    # max_acc_px_per_sec2=2.0e6,
-    lookback_sec,
-):
-
-    x = np.array(pred_dict["X"], dtype=np.float32)
-    y = np.array(pred_dict["Y"], dtype=np.float32)
-    vis = np.array(pred_dict["Visibility"], dtype=np.int32)
-    #print("mask params:", "fps", fps, "frame_w", frame_w, "frame_h", frame_h)
-    #print("border_margin =", int(min(frame_w, frame_h) * border_margin_ratio))
-    #print("sample X range:", float(np.min(x)), float(np.max(x)))
-
-    n = len(vis)
-    mask = np.zeros(n, dtype=np.int32)
-
-    # -------- FPS fallback --------
-    if fps is None or fps <= 1e-3:
-        fps = 60.0
-    else:
-        fps = float(fps)
-
-    # -------- 秒轉幀 --------
-    max_gap = int(round(max_gap_sec * fps))
-    if max_gap < 1:
-        max_gap = 1
-
-    lookback = int(round(lookback_sec * fps))
-    if lookback < 1:
-        lookback = 1
-
-    border_margin = int(min(frame_w, frame_h) * border_margin_ratio)
-
-    # -------- 如果之後要用 speed / acc（目前關閉）--------
-    # max_speed = max_speed_px_per_sec / fps
-    # max_acc = max_acc_px_per_sec2 / (fps * fps)
-
-    i = 0
-    while i < n:
-
-        # 如果是可見點，直接往前
-        if vis[i] == 1:
-            i += 1
-            continue
-
-        # 找出洞的結尾 j（洞是 [i, j)）
-        j = i
-        while j < n and vis[j] == 0:
-            j += 1
-
-        gap_len = j - i
-
-        # -------- (1) 洞太長 → 不補 --------
-        if gap_len > max_gap:
-            i = j
-            continue
-
-        # -------- (2) 開頭或結尾洞 → 不補 --------
-        if i == 0 or j >= n:
-            i = j
-            continue
-
-        # -------- 取得消失前一幀位置 --------
-        pLx = float(x[i - 1])
-        pLy = float(y[i - 1])
-
-        # -------- 往前找 lookback 內最近可見點 --------
-        k0 = i - 1 - lookback
-        if k0 < 0:
-            k0 = 0
-
-        k = i - 1
-        while k > k0 and vis[k - 1] == 0:
-            k -= 1
-
-        prev_idx = None
-        if (k - 1) >= 0 and vis[k - 1] == 1:
-            prev_idx = k - 1
-
-        # -------- 計算消失前速度 vL --------
-        if prev_idx is not None and (i - 1) > prev_idx:
-            dt = float((i - 1) - prev_idx)
-            vLx = (float(x[i - 1]) - float(x[prev_idx])) / dt
-            vLy = (float(y[i - 1]) - float(y[prev_idx])) / dt
-        else:
-            vLx = 0.0
-            vLy = 0.0
-
-        # -------- (3) 出畫面判斷：靠邊界 + 速度朝外 --------
-        near_border = (
-            (pLx < border_margin) or
-            (pLx > frame_w - 1 - border_margin) or
-            (pLy < border_margin) or
-            (pLy > frame_h - 1 - border_margin)
-        )
-
-        outward = False
-        if pLx < border_margin and vLx < 0:
-            outward = True
-        elif pLx > frame_w - 1 - border_margin and vLx > 0:
-            outward = True
-        elif pLy < border_margin and vLy < 0:
-            outward = True
-        elif pLy > frame_h - 1 - border_margin and vLy > 0:
-            outward = True
-
-        if near_border and outward:
-            i = j
-            continue
-        """
-        # -------- 計算 gap 兩端平均速度 v_gap --------
-        pRx = float(x[j])
-        pRy = float(y[j])
-
-        v_gap_x = (pRx - pLx) / float(gap_len + 1)
-        v_gap_y = (pRy - pLy) / float(gap_len + 1)
-
-        speed = np.sqrt(v_gap_x**2 + v_gap_y**2)
-
-        # -------- 計算加速度 --------
-        acc = np.sqrt((v_gap_x - vLx)**2 + (v_gap_y - vLy)**2)
-
-        # -------- (4) 如果之後要啟用速度門檻 --------
-        
-        if speed > max_speed:
-            i = j
-            continue
-
-        if acc > max_acc:
-            i = j
-            continue
-        """
-
-        # -------- (5) 其他情況 → 補洞 --------
-        mask[i:j] = 1
-        i = j
-
-    # -------- 若有 GT 則尊重 GT --------
-    if "Visibility_GT" in pred_dict:
-        gt_vis = np.array(pred_dict["Visibility_GT"], dtype=np.int32)
-        mask[gt_vis == 0] = 0
-
-    return mask.tolist()
-'''
-'''
-def generate_inpaint_mask(
-    pred_dict,
-    frame_w,
-    frame_h,
-    max_gap=12,        # 只補短洞：120fps 可先 12；60fps 可先 6~8
-    border_margin=12,  # 距離邊界太近視為出畫面/入畫面，不補
-):
-
-    x = np.asarray(pred_dict["X"], dtype=float)
-    y = np.asarray(pred_dict["Y"], dtype=float)
-    vis = np.asarray(pred_dict["Visibility"], dtype=int)
-
-    n = len(vis)
-    mask = np.zeros(n, dtype=int)
-
-    def near_border(px, py):
-        return (
-            px < border_margin or px > (frame_w - 1 - border_margin) or
-            py < border_margin or py > (frame_h - 1 - border_margin)
-        )
-
-    i = 0
-    while i < n:
-        if vis[i] == 1:
-            i += 1
-            continue
-
-        start = i
-        while i < n and vis[i] == 0:
-            i += 1
-        end = i  # [start, end) 是消失段
-
-        # (1) 不補 prefix/suffix
-        if start == 0 or end == n:
-            continue
-
-        # (2) 只補短洞
-        if (end - start) > max_gap:
-            continue
-
-        # (3) 出畫面/入畫面：前後點靠邊就不補
-        if near_border(x[start - 1], y[start - 1]) or near_border(x[end], y[end]):
-            continue
-
-        mask[start:end] = 1
-
-    # 保留你原本的 GT 保護（如果有）
-    if "Visibility_GT" in pred_dict:
-        gt_vis = np.asarray(pred_dict["Visibility_GT"], dtype=int)
-        mask[gt_vis == 0] = 0
-
-    return mask.tolist()
-'''
 def generate_inpaint_mask(
     pred_dict,
     frame_w,
@@ -733,13 +582,15 @@ def generate_inpaint_mask(
     max_angle_diff=100.0,
     min_valid_run=1,
     angle_check_min_gap=4,
+    max_reverse_dx=40.0,
 ):
     """
     給高速球用的較寬鬆版本：
     - 只補中間短洞
-    - 只看左右邊界，不看上下
+    - 只看右邊界，不看左邊、上下
     - 短 gap 不用 jump / avg_step 擋
     - angle 只對較長 gap 檢查
+    - 只有較長 gap 額外檢查 x 方向是否明顯反轉
     """
 
     x = np.asarray(pred_dict["X"], dtype=float)
@@ -750,9 +601,7 @@ def generate_inpaint_mask(
     mask = np.zeros(n, dtype=int)
 
     def near_border(px, py):
-        return (
-            px < border_margin_x or px > (frame_w - 1 - border_margin_x)
-        )
+        return px > (frame_w - 1 - border_margin_x)
 
     def find_prev_visible(idx):
         k = idx
@@ -810,11 +659,9 @@ def generate_inpaint_mask(
 
         gap_len = end - start
 
-        # (1) prefix / suffix 不補
         if start == 0 or end == n:
             continue
 
-        # (2) 只補短洞
         if gap_len > max_gap:
             continue
 
@@ -824,26 +671,32 @@ def generate_inpaint_mask(
         if prev_idx < 0 or next_idx >= n:
             continue
 
-        # (3) 只檢查左右邊界
         if near_border(x[prev_idx], y[prev_idx]) or near_border(x[next_idx], y[next_idx]):
             continue
 
-        # (4) gap 前後至少各有 1 個可見點即可
         if count_visible_backward(prev_idx) < min_valid_run:
             continue
         if count_visible_forward(next_idx) < min_valid_run:
             continue
 
-        # (5) 短 gap 直接補，不做 angle 檢查
+        # 短 gap 維持原本：直接補
         if gap_len < angle_check_min_gap:
             mask[start:end] = 1
             continue
 
-        # (6) 較長 gap 才檢查方向連續性
         prev2_idx = find_prev_visible(prev_idx - 1)
         next2_idx = find_next_visible(next_idx + 1)
 
         if prev2_idx >= 0 and next2_idx < n:
+            dx_before = x[prev_idx] - x[prev2_idx]
+            dx_after = x[next2_idx] - x[next_idx]
+
+            # 只有較長 gap 才擋明顯反轉
+            if dx_before < -max_reverse_dx and dx_after > max_reverse_dx:
+                continue
+            if dx_before > max_reverse_dx and dx_after < -max_reverse_dx:
+                continue
+
             v_before = np.array(
                 [x[prev_idx] - x[prev2_idx], y[prev_idx] - y[prev2_idx]],
                 dtype=float
@@ -1304,11 +1157,11 @@ def test_rally(model, rally_dir, param_dict, save_inpaint_mask=False):
             tracknet_pred_dict,
             frame_w=w,
             frame_h=h,
-            max_gap=8,
-            border_margin=200,
-            max_jump_dist=800.0,
-            max_angle_diff=80.0,
-            min_valid_run=2,
+            max_gap=10,
+            border_margin_x=160,
+            max_angle_diff=100.0,
+            min_valid_run=1,
+            angle_check_min_gap=8,
         )
         return tracknet_pred_dict
     else:

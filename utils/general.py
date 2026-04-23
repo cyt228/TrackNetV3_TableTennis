@@ -308,6 +308,9 @@ def write_pred_video(video_file, pred_dict, save_file, traj_len=8, label_df=None
             cx, cy = pred_queue[0]  # appendleft → index 0 is newest/current
             cv2.circle(frame, (int(cx), int(cy)), 5, (0, 0, 255), -1)  # BGR red
 
+        # Draw frame index
+        cv2.putText(frame, f"Frame: {i}", (30, 50), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 255), 2, cv2.LINE_AA)
+
         out.write(frame)
         i += 1
 

@@ -1,6 +1,6 @@
 # single
-# CUDA_VISIBLE_DEVICES=2 python predict.py  --video_file 048/C0045.mp4 --tracknet_file exp/TrackNet_best.pt --inpaintnet_file exp/InpaintNet_best.pt --save_dir 048 --eval_mode weight --output_video
-#full
+# CUDA_VISIBLE_DEVICES=2 python predict.py  --video_file 048/C0045.mp4 --tracknet_file exp/TrackNet_best.pt --inpaintnet_file exp/InpaintNet_best.pt --save_dir 048 --eval_mode weight --output_video --large_video
+# full
 # CUDA_VISIBLE_DEVICES=2 python predict.py --video_dir /home/code-server/NO3 --tracknet_file exp/TrackNet_best.pt --inpaintnet_file exp/InpaintNet_best.pt --save_dir /home/code-server/NO3/pred_result --eval_mode weight --output_video --large_video
 
 import os
@@ -42,11 +42,13 @@ def predict(indices, y_pred=None, c_pred=None, img_scaler=(1, 1), track_state=No
         track_state = {
             "history": [],
             "miss_count": 0,
+            "ignore_stale_until": -1,
+            "ignore_stale_pos": None,
         }
 
     MAX_CANDIDATES = 3
-    MAX_DIST_TO_PRED = 140.0
-    MAX_DIST_TO_LAST = 180.0
+    MAX_DIST_TO_PRED = 110
+    MAX_DIST_TO_LAST = 150
     HISTORY_SIZE = 8
 
     pred_dict = {'Frame':[], 'X':[], 'Y':[], 'Visibility':[]}
@@ -99,39 +101,106 @@ def predict(indices, y_pred=None, c_pred=None, img_scaler=(1, 1), track_state=No
                     frame_w = int(WIDTH * img_scaler[0])
                     frame_h = int(HEIGHT * img_scaler[1])
 
-                    allow_reacquire = False
-
-                    # 若上一顆球已經接近邊界且往外移動，表示這條 track 應該結束
-                    if should_reset_track(
+                    need_reset, reset_reason = should_reset_track(
                         track_state["history"],
                         frame_w=frame_w,
                         frame_h=frame_h,
                         miss_count=track_state["miss_count"],
-                        border_margin=20,
-                        max_stale_miss=2,
+                        border_margin=40,
+                        stale_frames=6,
+                        stale_avg_step_thresh=6.5,
+                        stale_y_span_thresh=12.0,
+                        stale_x_span_thresh=35.0,
+                        # debug=True,
+                    )
+
+                    if need_reset:
+                        valid_history = [(x, y) for (x, y, vis) in track_state["history"] if vis == 1]
+                        last_valid = valid_history[-1] if len(valid_history) > 0 else None
+                        print(
+                            f"[reset] frame={f_i}, "
+                            f"reason={reset_reason}, "
+                            f"miss_count={track_state['miss_count']}, "
+                            f"history_len={len(track_state['history'])}, "
+                            f"last_valid={last_valid}"
+                        )
+
+                        # 如果是桌上慢球，進入 ignore stale 模式
+                        if reset_reason == "stale_ball" and last_valid is not None:
+                            track_state["ignore_stale_until"] = int(f_i) + 80
+                            track_state["ignore_stale_pos"] = last_valid
+
+                    # reset 的語意：上一顆球真的結束了
+                    allow_reacquire = need_reset
+
+                    select_history = [] if need_reset else track_state["history"]
+                    select_miss_count = 0 if need_reset else track_state["miss_count"]
+
+                    # --------------------------------------------------
+                    # 忽略已知桌上慢球附近的候選，避免一直重新抓到同一顆慢球
+                    # --------------------------------------------------
+                    if (
+                        track_state.get("ignore_stale_pos") is not None and
+                        int(f_i) <= track_state.get("ignore_stale_until", -1)
                     ):
-                        track_state["history"] = []
-                        track_state["miss_count"] = 0
-                        allow_reacquire = True
+                        sx, sy = track_state["ignore_stale_pos"]
+
+                        filtered_candidates = []
+                        for c in scaled_candidates:
+                            if abs(c["cx"] - sx) <= 80 and abs(c["cy"] - sy) <= 50:
+                                continue
+                            filtered_candidates.append(c)
+
+                        if len(filtered_candidates) != len(scaled_candidates):
+                            print(
+                                f"[ignore_stale] frame={f_i}, "
+                                f"ignore_pos=({sx},{sy}), "
+                                f"before={len(scaled_candidates)}, after={len(filtered_candidates)}"
+                            )
+
+                        scaled_candidates = filtered_candidates
 
                     chosen = select_best_candidate(
                         candidates=scaled_candidates,
-                        history=track_state["history"],
-                        miss_count=track_state["miss_count"],
+                        history=select_history,
+                        miss_count=select_miss_count,
                         max_dist_to_pred=MAX_DIST_TO_PRED,
                         max_dist_to_last=MAX_DIST_TO_LAST,
+                        min_y=150,
+                        max_y=720,
+                        reject_score=70,
                         allow_reacquire=allow_reacquire,
+                        frame_idx=f_i,  # for debug
                     )
 
                     if chosen is None:
                         cx_pred, cy_pred = 0, 0
-                        track_state["miss_count"] += 1
-                        track_state["history"].append((0, 0, 0))
+
+                        if need_reset:
+                            # 舊球已結束，而且這一幀也還沒接到新球
+                            # 直接清空，等待下一顆球
+                            track_state["history"] = []
+                            track_state["miss_count"] = 0
+                        else:
+                            # 同一顆球中間短 miss：不 reset，交給 select 之後接回
+                            track_state["miss_count"] += 1
+                            track_state["history"].append((0, 0, 0))
                     else:
                         cx_pred = int(chosen["cx"])
                         cy_pred = int(chosen["cy"])
-                        track_state["miss_count"] = 0
-                        track_state["history"].append((cx_pred, cy_pred, 1))
+
+                        # 一旦接到新球，就解除 stale ignore
+                        track_state["ignore_stale_until"] = -1
+                        track_state["ignore_stale_pos"] = None
+
+                        if need_reset:
+                            # reset 後接到新球：重開一條新 history
+                            track_state["history"] = [(cx_pred, cy_pred, 1)]
+                            track_state["miss_count"] = 0
+                        else:
+                            # 同一顆球正常延續
+                            track_state["history"].append((cx_pred, cy_pred, 1))
+                            track_state["miss_count"] = 0
 
                     if len(track_state["history"]) > HISTORY_SIZE:
                         track_state["history"] = track_state["history"][-HISTORY_SIZE:]
@@ -185,6 +254,7 @@ if __name__ == '__main__':
     large_video = args.large_video
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    # device = torch.device("cpu")
     print("device:", device)
 
     # Load model
@@ -238,6 +308,8 @@ if __name__ == '__main__':
         track_state = {
             "history": [],
             "miss_count": 0,
+            "ignore_stale_until": -1,
+            "ignore_stale_pos": None,
         }
 
         # Test on TrackNet
@@ -359,11 +431,11 @@ if __name__ == '__main__':
                 tracknet_pred_dict,
                 frame_w=w,
                 frame_h=h,
-                max_gap=10,
+                max_gap=14,
                 border_margin_x=160,
                 max_angle_diff=100.0,
                 min_valid_run=1,
-                angle_check_min_gap=8,
+                angle_check_min_gap=14,
             )
 
             inpaint_pred_dict = {'Frame':[], 'X':[], 'Y':[], 'Visibility':[]}
