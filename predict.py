@@ -166,8 +166,6 @@ def predict(indices, y_pred=None, c_pred=None, img_scaler=(1, 1), track_state=No
                         miss_count=select_miss_count,
                         max_dist_to_pred=MAX_DIST_TO_PRED,
                         max_dist_to_last=MAX_DIST_TO_LAST,
-                        min_y=150,
-                        max_y=720,
                         reject_score=70,
                         allow_reacquire=allow_reacquire,
                         frame_idx=f_i,  # for debug
