@@ -1,228 +1,854 @@
-# TrackNetV3: Enhancing ShuttleCock Tracking with Augmentations and Trajectory Rectification
-We present TrackNetV3, a model composed of two core modules: trajectory prediction and rectification. The trajectory prediction module leverages an estimated background as auxiliary data to locate the shuttlecock in spite of the fluctuating visual interferences. This module also incorporates mixup data augmentation to formulate complex
-scenarios to strengthen the network’s robustness. Given that a shuttlecock can occasionally be obstructed, we create repair masks by analyzing the predicted trajectory, subsequently rectifying the path via inpainting.
-[[paper](https://dl.acm.org/doi/10.1145/3595916.3626370)]
+# TrackNetV3 for Table Tennis
 
-<div align="center">
-    <a href="./">
-        <img src="./figure/NetArch.png" width="50%"/>
-    </a>
-</div>
+TrackNetV3 主要由兩個模型組成：
+- 第一個模型負責追蹤影片中球的位置，產生初步軌跡
+- 第二個模型則負責對漏偵測或不連續的軌跡進行 inpainting 補點
 
-## Performance 
+[模型下載](https://1drv.ms/u/c/ab3b33d5410e04f3/IQCwzwpuGP6pSpgw0VyyRSCzAa4jTyVFYiFWUgSd8gPeCf0?e=hWQh7G)
 
-* Performance on the test split of [Shuttlecock Trajectory Dataset](https://hackmd.io/Nf8Rh1NrSrqNUzmO0sQKZw).
+## 主要內容
 
-<div align="center">
-    <table>
-    <thead>
-        <tr>
-        <th>Model</th> <th>Accuracy</th> <th>Precision</th> <th>Recall</th> <th>F1</th> <th>FPS</th>
-        </tr>
-    </thead>
-    <tbody>
-        <tr>
-        <td>YOLOv7</td> <td>57.82%</td> <td>78.53%</td> <td>59.96%</td> <td>68.00%</td> <td><b>34.77</b></td>
-        </tr>
-        <tr>
-        <td>TrackNetV2</td> <td>94.98%</td> <td><b>99.64%</b></td> <td>94.56%</td> <td>97.03%</td> <td>27.70</td>
-        </tr>
-        <tr>
-        <td>TrackNetV3</td> <td><b>97.51%</b></td> <td>97.79%</td> <td><b>99.33%</b></td> <td><b>98.56%</b></td> <td>25.11</td>
-        </tr>
-    </tbody>
-    </table>
-    </br>
-    <a href="./">
-        <img src="./figure/Comparison.png" width="80%"/>
-    </a>
-</div>
+從原版 TrackNetV3 修改而來，目前主要修改重點放在：
 
-## Installation
-* Develop Environment
-    ```
-    Ubuntu 16.04.7 LTS
-    Python 3.8.7
-    torch 1.10.0
-    ```
-* Clone this reposity.
-    ```
-    git clone https://github.com/qaz812345/TrackNetV3.git
-    ```
+- `predict.py`
+  - 支援單支影片預測
+  - 支援整個資料夾批次預測
+  - 支援輸出預測影片
+  - 支援大影片模式
+  - 修改 inpaint mask 的補洞條件
 
-* Install the requirements.
-    ```
-    pip install -r requirements.txt
-    ```
+- `utils/general.py`
+  - 修改輸出影片格式
+  - 修改預測軌跡顯示方式
+  - 修改 `generate_inpaint_mask()`
 
-## Inference
-* Download the [checkpoints](https://drive.google.com/file/d/1CfzE87a0f6LhBp0kniSl1-89zaLCZ8cA/view?usp=sharing)
-* Unzip the file and place the parameter files to ```ckpts```
-    ```
-    unzip TrackNetV3_ckpts.zip
-    ```
-* Predict the label csv from the video
-    ```
-    python predict.py --video_file test.mp4 --tracknet_file ckpts/TrackNet_best.pt --inpaintnet_file ckpts/InpaintNet_best.pt --save_dir prediction
-    ```
-* Predict the label csv from the video, and output a video with predicted trajectory
-    ```
-    python predict.py --video_file test.mp4 --tracknet_file ckpts/TrackNet_best.pt --inpaintnet_file ckpts/InpaintNet_best.pt --save_dir prediction --output_video
-    ```
-* For large video
-    * Enable the ```--large_video``` flag to use an IterableDataset instead of the normal Dataset, which prevents memory errors. Note that this will decrease the inference speed.
-    * Use ```--max_sample_num``` to set the number of samples for background estimation.
-    * Use ```--video_range``` to specify the start and end seconds of the video for background estimation.
-    ```
-    python predict.py --video_file test.mp4 --tracknet_file ckpts/TrackNet_best.pt --inpaintnet_file ckpts/InpaintNet_best.pt --save_dir prediction --large_video --video_range 324,330
-    ```
+- `test.py`
+  - 主要保留原版 evaluation / testing 流程
+  - `predict.py` 會使用裡面的 `predict_location()`、`get_ensemble_weight()`、`generate_inpaint_mask()` 等功能
+  - 有增加與修改部分功能等，ex `generate_inpaint_mask()`、`select_best_candidate()`、`should_reset_track()`等
 
-## Training
-### 1. Prepare Dataset
-* Download [Shuttlecock Trajectory Dataset](https://hackmd.io/Nf8Rh1NrSrqNUzmO0sQKZw)
-* Adjust file structure:
-    1. Merge the `Professional` and `Amateur` match directories into a single `train` directory.
-    2. Rename the `Amateur` match directories to start from `match24` through `match26`.
-    3. Rename the `Test` directory to `test`.
-* Dataset file structure:
+train 相關流程基本沿用原版 TrackNetV3，之後如果要重新訓練，可以參考[TrackNetV3 原始專案](https://github.com/qaz812345/TrackNetV3)
+
+[speed analysis](./speed_analysis) 的詳細介紹另外放在 `speed_analysis/`中
+
+## 檔案說明
+
+| 檔案 / 資料夾 | 用途 |
+|---|---|
+| `predict.py` | 主要預測程式，用來對影片產生球的位置 csv，也可以輸出畫上軌跡的影片 |
+| `test.py` | 原版測試與 evaluation 流程，包含 heatmap 轉座標、ensemble 權重、評估指標等 |
+| `train.py` | 訓練 TrackNet / InpaintNet，基本沿用原版 |
+| `dataset.py` | Dataset 與影片 frame 讀取相關設定 |
+| `model.py` | TrackNet 與 InpaintNet model 定義 |
+| `utils/general.py` | 通用工具函式，例如模型建立、影片讀取、csv 輸出、影片輸出、inpaint mask |
+| `preprocess.py` | 原版資料前處理 |
+| `generate_mask_data.py` | 產生 InpaintNet 訓練用的 mask data |
+| `correct_label.py` | 修正 label 相關工具 |
+| `error_analysis.py` | 原版 error analysis 介面 |
+| `requirements.txt` | 環境套件 |
+| `speed_analysis/` | 速度、落點、stroke 分析 |
+
+## predict.py 使用方式
+
+### 單支影片預測
+
+```bash
+python predict.py --video_file 048/C0045.mp4 --tracknet_file exp/TrackNet_best.pt --inpaintnet_file exp/InpaintNet_best.pt --save_dir 048 --eval_mode weight --output_video --large_video
 ```
-  data
-    ├─ train
-    |   ├── match1/
-    |   │   ├── csv/
-    |   │   │   ├── 1_01_00_ball.csv
-    |   │   │   ├── 1_02_00_ball.csv
-    |   │   │   ├── …
-    |   │   │   └── *_**_**_ball.csv
-    |   │   ├── frame/
-    |   │   │   ├── 1_01_00/
-    |   │   │   │   ├── 0.png
-    |   │   │   │   ├── 1.png
-    |   │   │   │   ├── …
-    |   │   │   │   └── *.png
-    |   │   │   ├── 1_02_00/
-    |   │   │   │   ├── 0.png
-    |   │   │   │   ├── 1.png
-    |   │   │   │   ├── …
-    |   │   │   │   └── *.png
-    |   │   │   ├── …
-    |   │   │   └── *_**_**/
-    |   │   │
-    |   │   └── video/
-    |   │       ├── 1_01_00.mp4
-    |   │       ├── 1_02_00.mp4
-    |   │       ├── …
-    |   │       └── *_**_**.mp4
-    |   ├── match2/
-    |   │ ⋮
-    |   └── match26/
-    ├─ val
-    |   ├── match1/
-    |   ├── match2/
-    |   │ ⋮
-    |   └── match26/
-    └─ test
-        ├── match1/
-        ├── match2/
-        └── match3/
+
+### 整個資料夾預測
+
+```bash
+python predict.py --video_dir /home/code-server/NO3 --tracknet_file exp/TrackNet_best.pt --inpaintnet_file exp/InpaintNet_best.pt --save_dir /home/code-server/NO3/pred_result --eval_mode weight --output_video --large_video
 ```
-* Attributes in each csv files: `Frame, Visibility, X, Y`
-* Data preprocessing
-    ```
-    python preprocess.py
-    ```
-* The `frame` directories and the `val` directory will be generated after preprocessing.
-* Check the estimated background images in `<data_dir>/median`
-    * If available, the dataset will use the median image of the match; otherwise, it will use the median image of the rally.
-    * For example, you can exclude `train/match16/median.npz` due to camera angle discrepancies; therefore, the dataset will resort to the median image of the rally within match 16.
-* Set the data root directory to `data_dir` in `dataset.py`.
-    * `dataset.py` will generate the image mapping for each sample and cache the result in `.npy` files.
-    * If you modify any related functions in `dataset.py`, please ensure you delete these cached files.
-### 2. Train Tracking Module
-* Train the tracking module from scratch
-    ```
-    python train.py --model_name TrackNet --seq_len 8 --epochs 30 --batch_size 10 --bg_mode concat --alpha 0.5 --save_dir exp --verbose
-    ```
 
-* Resume training (start from the last epoch to the specified epoch)
-    ```
-    python train.py --model_name TrackNet --epochs 30 --save_dir exp --resume_training --verbose
-    ```
+### predict.py 參數說明
 
-### 3. Generate Predicted Trajectories and Inpainting Masks
-* Generate predicted trajectories and inpainting masks for training rectification module
-    * Noted that the coordinate range corresponds to the input spatial dimensions, not the size of the original image.
-    ```
-    python generate_mask_data.py --tracknet_file ckpts/TrackNet_best.pt --batch_size 16
-    ```
+| 參數 | 說明 |
+|---|---|
+| `--video_file` | 單支影片路徑 |
+| `--video_dir` | 整個資料夾批次預測 |
+| `--tracknet_file` | TrackNet 權重檔 |
+| `--inpaintnet_file` | InpaintNet 權重檔，不填則只跑 TrackNet |
+| `--batch_size` | inference batch size，預設 16 |
+| `--eval_mode` | temporal ensemble 模式，可選 `nonoverlap`、`average`、`weight` |
+| `--max_sample_num` | 大影片產生 median background 時最多取樣幾個 frame |
+| `--video_range` | 指定用哪一段影片秒數產生 background，例如 `324,330` |
+| `--save_dir` | 輸出資料夾 |
+| `--large_video` | 大影片模式，使用 IterableDataset，避免記憶體爆掉 |
+| `--output_video` | 是否輸出畫上軌跡的影片 |
+| `--traj_len` | 輸出影片中顯示幾個 frame 的歷史軌跡，預設 8 |
 
-### 4. Train Rectification Module
-* Train the rectification module from scratch.
-    ```
-    python train.py --model_name InpaintNet --seq_len 16 --epoch 300 --batch_size 32 --lr_scheduler StepLR --mask_ratio 0.3 --save_dir exp --verbose
-    ```
+### 輸出檔案
 
-* Resume training (start from the last epoch to the specified epoch)
-    ```
-    python train.py --model_name InpaintNet --epochs 30 --save_dir exp --resume_training
-    ```
+每支影片會輸出：
 
-## Evaluation
-* Evaluate TrackNetV3 on test set
-    ```
-    python generate_mask_data.py --tracknet_file ckpts/TrackNet_best.pt --split_list test
-    python test.py --inpaintnet_file ckpts/InpaintNet_best.pt --save_dir eval
-    ```
+| 檔案 | 說明 |
+|---|---|
+| `影片名稱_ball.csv` | 每一 frame 的球座標 |
+| `影片名稱_predict.mp4` | 如果有加 `--output_video`，會輸出畫上球軌跡的影片 |
 
-* Evaluate the tracking module on test set
-    ```
-    python test.py --tracknet_file ckpts/TrackNet_best.pt --save_dir eval
-    ```
+csv 格式：
 
-* Generate video with ground truth label and predicted result
-    ```
-    python test.py --tracknet_file ckpts/TrackNet_best.pt --video_file data/test/match1/video/1_05_02.mp4 
-    ```
+| 欄位 | 說明 |
+|---|---|
+| `Frame` | frame 編號 |
+| `Visibility` | 是否有偵測到球，1 代表有球，0 代表無球 |
+| `X` | 球的 x 座標 |
+| `Y` | 球的 y 座標 |
+| `Inpaint_Mask` | 有沒有做 inpaint ，1 代表有，0 代表沒有 |
 
-## Error Analysis Interface
-* Evaluate TrackNetV3 on test set and save the detail results for error analysis
-    ```
-    python test.py --tracknet_file ckpts/TrackNet_best.pt --inpaintnet_file ckpts/InpaintNet_best.pt --save_dir eval --output_pred
-    ```
+## 修改 / 新增的核心邏輯
+這部分主要說明本專案為了讓 TrackNetV3 更適合桌球影片，額外修改或新增的後處理邏輯。
 
-* Add json path of evaluation results to the file list in `error_analysis.py`
-    ```
-    30  # Evaluation result file list
-    31  if split == 'train':
-    32      eval_file_list = [
-    33          {'label': label_name, 'value': json_path},
-     ⋮                              ⋮
-            ]
-        elif split == 'val':
-            eval_file_list = [
-                {'label': label_name, 'value': json_path},
-                                    ⋮
-            ]
-        elif split == 'test':
-            eval_file_list = [
-                {'label': label_name, 'value': json_path},
-                                    ⋮
-            ]
-        else:
-            raise ValueError(f'Invalid split: {split}')                                  
-    ```
+主要包含：
 
-* Run Dash application
-    ```
-    python error_analysis.py --split test --host 127.0.0.1
-    ```
-<div align="center">
-    <a href="./">
-        <img src="./figure/ErrorAnalysisUI.png" width="70%"/>
-    </a>
-</div>
+- `generate_inpaint_mask()`：決定哪些缺失軌跡要交給 InpaintNet 補
+- `select_best_candidate()`：當同一 frame 有多個候選球點時，選出最可能是真球的位置
+- `should_reset_track()`：判斷目前是不是追錯球，是否需要重新開始追蹤
+- `write_pred_video()`：輸出預測影片，方便檢查軌跡結果
+- `predict.py`：支援單支影片與整個資料夾批次預測
 
-## Reference
-* TrackNetV2: https://nol.cs.nctu.edu.tw:234/open-source/TrackNetv2
-* Shuttlecock Trajectory Dataset: https://hackmd.io/@TUIK/rJkRW54cU
-* Labeling Tool: https://github.com/Chang-Chia-Chi/TrackNet-Badminton-Tracking-tensorflow2?tab=readme-ov-file#label
+### generate_inpaint_mask：控制哪些缺失片段要補
+
+`generate_inpaint_mask()` 的作用是產生 InpaintNet 要補的 mask
+
+TrackNet 預測後，可能會有一些 frame 沒有偵測到球，但不是所有 Visibility = 0 都應該補
+
+例如：
+
+- 球真的飛出畫面，不應該補
+- 影片開頭還沒出現球，不應該補
+- 影片結尾球已經離開畫面，不應該補
+- 中間短暫 miss，才適合交給 InpaintNet 補
+
+所以這邊的設計改成只補「前後都有球」的短暫缺失片段，也就是 `有球 → 短暫消失 → 有球` 這種情況才補
+
+#### 參數說明 & 調整
+
+參數說明:
+| 參數                    |     目前值 | 說明                                            |
+| --------------------- | ------: | --------------------------------------------- |
+| `pred_dict`           |       - | TrackNet 預測結果，包含 `Frame`、`X`、`Y`、`Visibility` |
+| `frame_w`             |       - | 原影片寬度，用來判斷右邊界                                 |
+| `frame_h`             |       - | 原影片高度，目前保留參數，但此版本主要使用 `frame_w` 判斷右邊界         |
+| `max_gap`             |    `10` | 最多允許連續幾個 frame 消失還可以補                         |
+| `border_margin_x`     |   `160` | 右邊界保護範圍，gap 前後球點太靠近右邊界時不補                     |
+| `max_angle_diff`      | `100.0` | 較長 gap 前後移動方向允許的最大角度差                         |
+| `min_valid_run`       |     `1` | gap 前後至少需要幾個連續可見點                             |
+| `angle_check_min_gap` |     `8` | gap 長度達到這個值才做方向檢查                             |
+| `max_reverse_dx`      |  `40.0` | 較長 gap 前後 x 方向明顯反轉時的判斷門檻                      |
+
+
+參數調整:
+| 問題                | 建議調整                                   |
+| ----------------- | -------------------------------------- |
+| 很多短暫 miss 沒有被補    | 調大 `max_gap`                           |
+| 補太多不該補的長洞         | 調小 `max_gap`                           |
+| 球快到右邊界時被錯補        | 調大 `border_margin_x`                   |
+| 右邊界附近明明還在畫面內卻補不到  | 調小 `border_margin_x`                   |
+| 長 gap 前後不是同一顆球卻被補 | 調小 `max_angle_diff` 或 `max_reverse_dx` |
+| 長 gap 明明合理但沒有補    | 調大 `max_angle_diff` 或 `max_reverse_dx` |
+| 想讓補洞更保守           | 調大 `min_valid_run`                     |
+| 短 gap 被方向限制擋掉     | 調大 `angle_check_min_gap`               |
+
+#### 補洞流程
+
+```
+讀取 TrackNet 預測結果
+↓
+找到 Visibility = 0 的連續缺失片段
+↓
+確認缺失片段不是影片開頭或結尾
+↓
+確認 gap 長度沒有超過 max_gap
+↓
+確認 gap 前後都有可見球點
+↓
+確認 gap 前後球點沒有太靠近右邊界
+↓
+確認 gap 前後有足夠的連續可見點
+↓
+如果是短 gap，直接標記為需要補
+↓
+如果是長 gap，額外檢查方向角度與 x 方向反轉
+↓
+產生 Inpaint_Mask
+```
+
+### `select_best_candidate()`：從多個候選球點中選出最合理的位置
+
+`select_best_candidate()` 是用來處理同一個 frame 中有多個候選球點的情況。
+
+TrackNet 輸出的 heatmap 可能會偵測到多個亮點，例如：
+
+```text
+真正的球
+背景中的白點
+殘影
+球桌反光
+遠處其他球
+```
+
+如果只選 heatmap 中面積最大的點，很容易在球消失、球速快、背景干擾多的情況下選錯。
+
+所以這裡的設計不是單純選最大的 candidate，而是會根據前面的軌跡 history 判斷哪一個候選點最合理。
+
+---
+
+#### Function 參數
+
+```python
+def select_best_candidate(
+    candidates,
+    history,
+    miss_count=0,
+    min_area_no_history=6.0,
+    min_area_with_history=2.0,
+    min_y=350,
+    max_y=900,
+    debug=False,
+):
+```
+
+---
+
+#### 參數說明
+
+| 參數 | 目前值 | 說明 |
+|---|---:|---|
+| `candidates` | - | 當前 frame 從 heatmap 找到的候選球點 |
+| `history` | - | 前面 frame 的球軌跡紀錄，格式為 `(x, y, visibility)` |
+| `miss_count` | `0` | 目前已經連續 miss 幾個 frame |
+| `min_area_no_history` | `6.0` | 沒有歷史軌跡時，候選點最小面積限制 |
+| `min_area_with_history` | `2.0` | 有歷史軌跡時，候選點最小面積限制 |
+| `min_y` | `350` | 候選點 y 座標下限 |
+| `max_y` | `900` | 候選點 y 座標上限 |
+| `debug` | `False` | 是否輸出 debug 訊息 |
+
+---
+
+#### 基本選點流程
+
+```text
+讀取當前 frame 的 candidates
+↓
+如果沒有 candidates，回傳 None
+↓
+先用 min_y / max_y 過濾候選點
+↓
+如果過濾後沒有 candidates，回傳 None
+↓
+從 history 取出過去 visibility = 1 的有效球點
+↓
+如果沒有有效 history，用面積選球
+↓
+如果有有效 history，根據上一個球點與預測位置篩選 candidates
+↓
+排除不合理的 y 跳動
+↓
+排除不合理的 x 跳動
+↓
+排除方向突然反轉的 candidate
+↓
+選出最接近預測位置的 candidate
+```
+
+---
+
+#### y 範圍限制
+
+一開始會先用 `min_y` 和 `max_y` 過濾 candidates：
+
+```python
+candidates = [c for c in candidates if min_y <= c["cy"] <= max_y]
+```
+
+目前設定：
+
+```python
+min_y = 350
+max_y = 900
+```
+
+也就是說，只有 y 座標在這個範圍內的候選點才會被考慮。
+
+這個限制主要是為了排除背景中的錯誤亮點。
+
+例如：
+
+```text
+太上方的亮點
+太下方的反光
+畫面中不可能是球的位置
+```
+
+都會先被濾掉。
+
+---
+
+#### 沒有 history 時的選點方式
+
+如果目前還沒有任何有效歷史軌跡：
+
+```python
+if not valid_history:
+```
+
+就不能根據前一個球點或方向來判斷。
+
+這時候會改用 candidate 面積判斷：
+
+```python
+valid_candidates = [c for c in candidates if c["area"] >= min_area_no_history]
+return max(valid_candidates, key=lambda c: c["area"])
+```
+
+目前設定：
+
+```python
+min_area_no_history = 6.0
+```
+
+意思是：
+
+```text
+沒有歷史軌跡時，只接受 area >= 6 的 candidate。
+```
+
+如果通過條件的候選點有多個，就選面積最大的那個。
+
+這通常會發生在：
+
+```text
+影片一開始
+reset 之後
+前面都沒有成功偵測到球
+```
+
+---
+
+#### 有 history 時的選點方式
+
+如果已經有有效球點，會使用上一個球的位置作為判斷基準。
+
+```python
+last_x, last_y = valid_history[-1]
+```
+
+如果至少有兩個歷史點，會計算上一段的移動方向：
+
+```python
+hist_dx = last_x - prev_x
+hist_dy = last_y - prev_y
+```
+
+然後估計下一個 frame 的預測位置：
+
+```python
+pred_x = last_x + hist_dx
+pred_y = last_y + hist_dy
+```
+
+也就是假設球會大致延續上一段的移動方向。
+
+後面選 candidate 時，會優先選接近這個預測位置的點。
+
+---
+
+#### 根據 miss_count 放寬 x 方向距離
+
+`miss_count` 會影響 x 方向允許的最大跳動距離。
+
+```python
+if miss_count == 0:
+    max_x_gap = 130.0
+elif miss_count <= 3:
+    max_x_gap = 350.0
+else:
+    max_x_gap = 550.0
+```
+
+整理如下：
+
+| `miss_count` 狀況 | `max_x_gap` | 意義 |
+|---|---:|---|
+| `miss_count == 0` | `130.0` | 沒有 miss，球應該離上一點不會太遠 |
+| `miss_count <= 3` | `350.0` | 短暫 miss，允許球移動更遠 |
+| `miss_count > 3` | `550.0` | miss 較久，允許更大的 x 位移 |
+
+這樣設計的原因是：
+
+```text
+球如果連續幾個 frame 沒被偵測到，
+重新出現時會離上一個位置比較遠。
+```
+
+所以 miss 越久，x 方向限制會越寬鬆。
+
+---
+
+#### candidate 過濾條件
+
+對每一個 candidate，會依序檢查以下條件。
+
+---
+
+##### 1. 面積太小不選
+
+```python
+if area < min_area_with_history:
+    continue
+```
+
+目前設定：
+
+```python
+min_area_with_history = 2.0
+```
+
+有 history 時，候選點面積至少要大於等於 2。
+
+這個條件主要是排除太小的雜訊點。
+
+---
+
+##### 2. y 方向跳太遠不選
+
+```python
+if y_to_last > 100:
+    continue
+```
+
+如果候選點和上一個球點的 y 距離超過 100 pixel，就不選。
+
+原因是桌球在相鄰 frame 之間，y 方向通常不應該突然跳太遠。
+
+這可以避免選到畫面中上下位置差太多的背景點。
+
+---
+
+##### 3. x 方向跳太遠不選
+
+```python
+if x_to_last > max_x_gap:
+    continue
+```
+
+如果候選點和上一個球點的 x 距離超過目前允許的 `max_x_gap`，就不選。
+
+這個限制會受到 `miss_count` 影響：
+
+```text
+沒有 miss：限制較嚴
+短暫 miss：限制放寬
+miss 較久：限制更放寬
+```
+
+---
+
+##### 4. 沒有 miss 時，避免方向突然反轉
+
+只有在以下條件成立時才會檢查：
+
+```python
+len(valid_history) >= 2 and miss_count == 0
+```
+
+也就是：
+
+```text
+至少有兩個歷史點
+而且目前不是 miss 後重新抓球
+```
+
+如果前一段 x 方向是往右，但這個 candidate 突然往左太多，就不選：
+
+```python
+if hist_dx > 12 and dx < -12:
+    continue
+```
+
+反過來也一樣：
+
+```python
+if hist_dx < -12 and dx > 12:
+    continue
+```
+
+這個條件是為了避免球正在往某個方向移動時，突然跳到反方向的背景點。
+
+---
+
+##### 5. 沒有 miss 時，candidate 不能離預測位置太遠
+
+同樣只在以下情況檢查：
+
+```python
+len(valid_history) >= 2 and miss_count == 0
+```
+
+如果 candidate 離預測位置太遠，就不選：
+
+```python
+if x_to_pred > 120 or y_to_pred > 80:
+    continue
+```
+
+目前限制是：
+
+| 距離 | 最大允許值 |
+|---|---:|
+| `x_to_pred` | `120` |
+| `y_to_pred` | `80` |
+
+這是為了讓軌跡更連續，避免明明沒有 miss，卻突然跳到離預測方向很遠的位置。
+
+---
+
+#### 最後如何選出 best candidate
+
+通過所有條件後，會從剩下的 `valid_candidates` 裡選出最合理的一個。
+
+排序依據是：
+
+```python
+best = min(
+    valid_candidates,
+    key=lambda item: (
+        item["x_to_pred"] if item["x_to_pred"] is not None else item["x_to_last"],
+        item["y_to_pred"] if item["y_to_pred"] is not None else 9999,
+        item["x_to_last"],
+        -item["area"],
+    )
+)
+```
+
+優先順序可以理解成：
+
+```text
+1. 優先選最接近預測 x 位置的 candidate
+2. 再看誰比較接近預測 y 位置
+3. 再看誰比較接近上一個球點
+4. 如果都差不多，選面積比較大的
+```
+
+也就是說，這裡不是單純選最大面積，而是優先選軌跡最合理的點。
+
+---
+
+#### 目前設計重點
+
+`select_best_candidate()` 的核心想法是：
+
+```text
+候選點不只要像球，也要符合前後軌跡。
+```
+
+它主要用來解決：
+
+```text
+背景球干擾
+球速快造成 frame 間距大
+短暫 miss 後重新抓球
+heatmap 有多個亮點
+球點突然跳到錯的位置
+```
+
+整體來說，這個 function 是讓 TrackNetV3 更適合桌球影片的關鍵修改之一。
+
+---
+
+#### 參數調整建議
+
+| 問題 | 建議調整 |
+|---|---|
+| 常常選到畫面上方或下方的背景點 | 調整 `min_y` / `max_y` |
+| 沒有 history 時一開始容易選錯 | 調大 `min_area_no_history` |
+| 有 history 時小雜訊被選到 | 調大 `min_area_with_history` |
+| 球速快，短暫 miss 後抓不回來 | 放大 `max_x_gap` 的設定 |
+| 沒有 miss 時仍然常常跳到背景球 | 縮小 `x_to_pred` / `y_to_pred` 限制 |
+| 球方向變化大但被擋掉 | 放寬方向反轉條件 |
+| y 方向跳動較大導致抓不到 | 放寬 `y_to_last > 100` 的限制 |
+
+---
+
+### `should_reset_track()`：判斷是否重新追蹤
+
+`should_reset_track()` 是用來判斷目前的追蹤狀態是否還可信。
+
+在桌球影片中，TrackNet 有時候會遇到這些情況：
+
+```text
+球飛出畫面
+球被人或球拍遮住
+球短暫消失
+背景白點被誤認成球
+球停在某個位置幾乎不動
+前面選錯球後，後面一路追錯
+```
+
+如果程式繼續相信目前的 history，後面的 `select_best_candidate()` 可能會一直根據錯誤的上一點去選球，導致整段軌跡都偏掉。
+
+所以 `should_reset_track()` 的目的就是：
+
+```text
+當目前軌跡看起來已經不可信時，清掉追蹤狀態，重新開始找球。
+```
+
+---
+
+#### Function 參數
+
+```python
+def should_reset_track(
+    history,
+    frame_w,
+    frame_h,
+    border_margin=40,
+    stale_frames=6,
+    stale_avg_step_thresh=6.5,
+    stale_y_span_thresh=12.0,
+    stale_x_span_thresh=35.0,
+    debug=False,
+):
+```
+
+---
+
+#### 參數說明
+
+| 參數 | 目前值 | 說明 |
+|---|---:|---|
+| `history` | - | 前面 frame 的追蹤紀錄，格式為 `(x, y, visibility)` |
+| `frame_w` | - | 原影片寬度，用來判斷球是否靠近左右邊界 |
+| `frame_h` | - | 原影片高度，用來判斷球是否靠近上下邊界 |
+| `border_margin` | `40` | 距離畫面邊界多少 pixel 內視為靠近邊界 |
+| `stale_frames` | `6` | 檢查最近幾個有效球點是否幾乎不動 |
+| `stale_avg_step_thresh` | `6.5` | 最近幾個有效球點的平均移動距離門檻 |
+| `stale_y_span_thresh` | `12.0` | 最近幾個有效球點的 y 方向最大變化門檻 |
+| `stale_x_span_thresh` | `35.0` | 最近幾個有效球點的 x 方向最大變化門檻 |
+| `debug` | `False` | 是否輸出 reset 原因 |
+
+---
+
+#### 回傳值
+
+```python
+return need_reset, reset_reason
+```
+
+| 回傳值 | 說明 |
+|---|---|
+| `need_reset` | `True` 代表需要 reset，`False` 代表繼續使用目前 history |
+| `reset_reason` | reset 原因，目前可能是 `"border_out"`、`"stale_ball"` 或 `None` |
+
+目前 reset 原因主要有兩種：
+
+| reset reason | 說明 |
+|---|---|
+| `"border_out"` | 球靠近邊界，而且移動方向是往畫面外 |
+| `"stale_ball"` | 最近幾個球點幾乎不動，可能追到背景球或停留的錯誤點 |
+
+---
+
+#### 基本 reset 流程
+
+```text
+讀取 history
+↓
+只保留 visibility = 1 的有效球點
+↓
+如果有效球點少於 2 個，不 reset
+↓
+檢查最後兩個有效球點的移動方向
+↓
+如果球靠近邊界，而且正在往畫面外移動，reset
+↓
+如果有效球點數量足夠，檢查最近 stale_frames 個點
+↓
+計算最近幾個點的平均移動距離
+↓
+計算最近幾個點的 x 方向變化範圍
+↓
+計算最近幾個點的 y 方向變化範圍
+↓
+如果球幾乎停在同一區域，reset
+↓
+其他情況不 reset
+```
+
+---
+
+#### 1. 邊界 reset：`border_out`
+
+第一種 reset 是判斷球是不是已經接近畫面邊界，而且正在往畫面外移動。
+
+程式會先取最後兩個有效球點：
+
+```python
+x1, y1 = valid_history[-2]
+x2, y2 = valid_history[-1]
+vx, vy = x2 - x1, y2 - y1
+```
+
+接著判斷最後一個點是否靠近邊界：
+
+```python
+near_border = (
+    x2 < border_margin or
+    x2 > (frame_w - 1 - border_margin) or
+    y2 < border_margin or
+    y2 > (frame_h - 1 - border_margin)
+)
+```
+
+目前 `border_margin=40`，代表球距離畫面上下左右邊界 40 pixel 內，都會被視為靠近邊界。
+
+但是「靠近邊界」還不一定 reset，還要同時判斷移動方向是不是往畫面外：
+
+```python
+moving_outward = (
+    (x2 < border_margin and vx < 0) or
+    (x2 > (frame_w - 1 - border_margin) and vx > 0) or
+    (y2 < border_margin and vy < 0) or
+    (y2 > (frame_h - 1 - border_margin) and vy > 0)
+)
+```
+
+也就是：
+
+```text
+靠近左邊界，且還在往左移動
+靠近右邊界，且還在往右移動
+靠近上邊界，且還在往上移動
+靠近下邊界，且還在往下移動
+```
+
+如果同時符合 `near_border` 和 `moving_outward`，就 reset：
+
+```python
+if near_border and moving_outward:
+    return True, "border_out"
+```
+
+這樣可以避免球已經飛出畫面後，程式還繼續沿用舊的 history 去追錯點。
+
+---
+
+#### 2. 停滯 reset：`stale_ball`
+
+第二種 reset 是判斷最近幾個球點是不是幾乎沒有移動。
+
+如果有效球點數量大於等於 `stale_frames`，就取最近幾個點來檢查：
+
+```python
+recent = valid_history[-stale_frames:]
+```
+
+目前：
+
+```python
+stale_frames = 6
+```
+
+也就是檢查最近 6 個有效球點。
+
+接著計算三個值：
+
+```text
+avg_step：最近幾個點之間的平均移動距離
+x_span：最近幾個點的 x 最大變化範圍
+y_span：最近幾個點的 y 最大變化範圍
+```
+
+如果三個條件都成立，就判斷為 `stale_ball`：
+
+```python
+if (
+    avg_step <= stale_avg_step_thresh and
+    y_span <= stale_y_span_thresh and
+    x_span <= stale_x_span_thresh
+):
+    return True, "stale_ball"
+```
+
+目前門檻是：
+
+| 條件 | 目前值 | 意義 |
+|---|---:|---|
+| `avg_step <= stale_avg_step_thresh` | `6.5` | 最近幾個點平均每次移動小於等於 6.5 pixel |
+| `y_span <= stale_y_span_thresh` | `12.0` | 最近幾個點 y 方向總變化小於等於 12 pixel |
+| `x_span <= stale_x_span_thresh` | `35.0` | 最近幾個點 x 方向總變化小於等於 35 pixel |
+
+這個設計主要是為了處理：
+
+```text
+背景球
+球桌上的固定白點
+錯誤殘影
+模型長時間停在某個錯誤位置
+```
+
+真正的高速桌球通常不會連續好幾個有效點都幾乎停在同一個小範圍內，所以這種情況通常代表追蹤已經不可靠。
+
+---
+
+#### 參數調整建議
+
+| 問題 | 建議調整 |
+|---|---|
+| 球靠近邊界時太早 reset | 調小 `border_margin` |
+| 球已經出畫面但還沒有 reset | 調大 `border_margin` |
+| 球速較慢時被誤判成 stale | 調小 `stale_avg_step_thresh`，或調小 `stale_frames` 的敏感度 |
+| 背景球停在畫面中卻沒有 reset | 調大 `stale_avg_step_thresh`，或調大 `stale_x_span_thresh` / `stale_y_span_thresh` 的判斷敏感度 |
+| reset 太頻繁，導致軌跡容易斷 | 放寬 stale 條件，例如降低 `stale_avg_step_thresh` 或增加 `stale_frames` |
+| reset 太晚，錯誤軌跡延續太久 | 收緊 stale 條件，例如提高 `stale_avg_step_thresh` 或減少 `stale_frames` |
+
+---
+
+#### 設計重點
+
+`should_reset_track()` 的重點是不要讓錯誤的 history 一直影響後面的選球。
+
+在目前流程中：
+
+```text
+history 會影響 select_best_candidate()
+select_best_candidate() 會影響每一 frame 選到哪一顆球
+選到的球點會影響後面的 generate_inpaint_mask()
+generate_inpaint_mask() 又會影響 InpaintNet 補軌跡
+```
+
+所以如果 history 已經不可信，就要 reset。
+
+reset 後的概念是：
+
+```text
+不要再用舊的軌跡方向去限制候選點，
+讓程式重新從目前 frame 的 candidates 裡找最可能的球。
+```
+
+---
+
+## train 相關
+
+目前 training 流程基本沿用原版 TrackNetV3。
+
+原版流程包含：
+
+1. prepare dataset
+2. preprocess
+3. train TrackNet
+4. generate mask data
+5. train InpaintNet
+6. evaluate
+
+如果只是使用目前這份專案做桌球影片預測，通常不需要重新訓練。
+
+如果要重新訓練，請參考原版 TrackNetV3
+
+## speed_analysis
+
+速度、落點、stroke 分析之後另外寫在：
+[Speed Analysis README](./speed_analysis/README.md)
