@@ -229,7 +229,7 @@ def find_best_hit_candidate(
             dy = y_b - y_a
             step = calc_step(x_a, y_a, x_b, y_b)
 
-            if step > max_step_th * 1.2 or abs(dx) > 140 or abs(dy) > 60:
+            if step > max_step_th * 1.2 or abs(dx) > 150 or abs(dy) > 60: # 可調整
                 abnormal_jump_count += 1
                 if abnormal_jump_count > 1:
                     break

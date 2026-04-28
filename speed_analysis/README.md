@@ -453,6 +453,10 @@ python speed_analysis/plot_speed.py --input path/to/xxx_stroke_zone.csv --speed 
 
 也可以直接輸入資料夾，程式會自動尋找底下所有： `*_stroke_zone.csv`，並分別輸出折線圖。
 
+```bash
+python speed_analysis/plot_speed.py --input path/to/folder
+```
+
 ![net_zone_max_speed](../images/C0050_predict_stroke_zone_net_zone_max_speed_kmh_line.png)
 
 ---
@@ -483,7 +487,7 @@ python speed_analysis/plot_speed.py --input path/to/xxx_stroke_zone.csv --speed 
 | 參數 | 目前預設值 | 建議範圍 | 作用 | 什麼時候調 |
 |---|---:|---:|---|---|
 | `min_left_segments` | `5` | `3 ~ 8` | hit 前至少要有幾段往左移動，才會被視為可能的 stroke start | 假 stroke 太多就調大；真正 stroke 被漏掉就調小 |
-| `min_candidate_frames` | `52` | `35 ~ 70` | 一個 stroke 至少要持續幾個 frame 才保留 | 太短的假 stroke 太多就調大；短球被漏掉就調小 |
+| `min_candidate_frames` | `50` | `35 ~ 70` | 一個 stroke 至少要持續幾個 frame 才保留 | 太短的假 stroke 太多就調大；短球被漏掉就調小 |
 | `max_step_th` | `130.0` | `100 ~ 160` | 相鄰 frame 最大允許位移，避免跳點 | 球速快、容易斷就調大；跳點太多就調小 |
 | `max_abs_dy_th` | `45.0` | `35 ~ 70` | hit 前往左移動時，y 方向最大允許變化 | 高拋或角度變化大就調大；亂點太多就調小 |
 | `left_half_ratio` | `0.5` | `0.45 ~ 0.55` | hit frame 必須發生在畫面左半邊的比例範圍 | hit 太晚就調小；hit 抓不到就調大 |
@@ -514,7 +518,7 @@ python speed_analysis/plot_speed.py --input path/to/xxx_stroke_zone.csv --speed 
 | `future_window` | `8` | `6 ~ 12` | hit 後檢查球是否穩定往右的範圍 |
 | `min_rise_px` | `80.0` | `60 ~ 120` | hit 後 x 至少要往右增加多少 pixel |
 | `min_net_right` | `3` | `2 ~ 5` | hit 後往右移動次數需大於往左移動次數多少 |
-| `abs(dx) > 140` | `140` | `120 ~ 180` | 過濾 hit 後不合理 x 大跳 |
+| `abs(dx) > 150` | `150` | `120 ~ 180` | 過濾 hit 後不合理 x 大跳 |
 | `abs(dy) > 60` | `60` | `50 ~ 90` | 過濾 hit 後不合理 y 大跳 |
 
 ---
