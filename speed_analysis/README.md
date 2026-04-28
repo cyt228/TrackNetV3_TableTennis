@@ -331,7 +331,7 @@ TABLE_H = 152.5 cm
 
 #### `landing_heatmap.png` — 落點熱力圖
 
-![landing_heatmap](images/landing_heatmap.png)
+![landing_heatmap](../images/landing_heatmap.png)
 
 這張圖會統計每個落點區域被擊中的次數。
 
@@ -346,7 +346,7 @@ TABLE_H = 152.5 cm
 
 #### `landing_zones.png` — 落點散佈圖
 
-![landing_zones](images/landing_zones.png)
+![landing_zones](../images/landing_zones.png)
 
 這張圖會顯示每一球的實際落點位置。
 
@@ -448,7 +448,7 @@ python speed_analysis/plot_speed.py --input path/to/xxx_stroke_zone.csv --speed 
 
 也可以直接輸入資料夾，程式會自動尋找底下所有： `*_stroke_zone.csv`，並分別輸出折線圖。
 
-![net_zone_max_speed](images/C0050_predict_stroke_zone_net_zone_max_speed_kmh_line.png)
+![net_zone_max_speed](../images/C0050_predict_stroke_zone_net_zone_max_speed_kmh_line.png)
 
 ---
 

@@ -123,13 +123,7 @@ Y = 0
 - 影片結尾球已經離開畫面，不應該補
 - 中間短暫 miss，才適合交給 InpaintNet 補
 
-所以這邊的設計是只補「前後都有球」的短暫缺失片段，也就是：
-
-```text
-有球 → 短暫消失 → 有球
-```
-
-這種情況才會補。
+所以這邊的設計是只補「前後都有球」的短暫缺失片段，也就是：`有球 → 短暫消失 → 有球`，這種情況才會補。
 
 ---
 
@@ -331,11 +325,7 @@ def select_best_candidate(
 | `max_y` | `900` | 候選點 y 座標上限 |
 | `debug` | `False` | 是否輸出 debug 訊息 |
 
-另外 `predict.py` 裡有一個 history 長度限制：
-
-```python
-HISTORY_SIZE = 8
-```
+另外 `predict.py` 裡有一個 history 長度限制：`HISTORY_SIZE = 8`
 
 代表 `history` 最多只保留最近 8 筆追蹤狀態，避免太久以前的軌跡影響目前選點。
 
@@ -413,11 +403,7 @@ valid_candidates = [c for c in candidates if c["area"] >= min_area_no_history]
 return max(valid_candidates, key=lambda c: c["area"])
 ```
 
-目前設定：
-
-```python
-min_area_no_history = 6.0
-```
+目前設定：`min_area_no_history = 6.0`
 
 意思是沒有歷史軌跡時，只接受 `area >= 6` 的 candidate。 如果通過條件的候選點有多個，就選面積最大的那個。
 
@@ -493,11 +479,7 @@ if area < min_area_with_history:
     continue
 ```
 
-目前設定：
-
-```python
-min_area_with_history = 2.0
-```
+目前設定：`min_area_with_history = 2.0`
 
 有 history 時，候選點面積至少要大於等於 2。
 
@@ -634,11 +616,7 @@ best = min(
 
 #### 設計重點
 
-`select_best_candidate()` 的核心想法是：
-
-```text
-候選點不只要像球，也要符合前後軌跡。
-```
+`select_best_candidate()` 的核心想法是：候選點不只要像球，也要符合前後軌跡。
 
 它主要用來解決：
 
@@ -667,11 +645,7 @@ heatmap 有多個亮點
 前面選錯球後，後面一路追錯
 ```
 
-如果程式繼續相信目前的 history，後面的 `select_best_candidate()` 可能會一直根據錯誤的上一點去選球，導致整段軌跡都偏掉。所以 `should_reset_track()` 的目的就是：
-
-```text
-當目前軌跡看起來已經不可信時，清掉追蹤狀態，重新開始找球。
-```
+如果程式繼續相信目前的 history，後面的 `select_best_candidate()` 可能會一直根據錯誤的上一點去選球，導致整段軌跡都偏掉。所以 `should_reset_track()` 的目的就是：當目前軌跡看起來已經不可信時，清掉追蹤狀態，重新開始找球。
 
 ---
 
@@ -744,13 +718,7 @@ track_state = {
 | `ignore_stale_until` | stale reset 後，在指定 frame 前暫時忽略舊位置附近的候選點 |
 | `ignore_stale_pos` | stale reset 發生時最後一個有效球點位置 |
 
-另外 `predict.py` 目前設定：
-
-```python
-HISTORY_SIZE = 8
-```
-
-所以 history 最多保留最近 8 筆狀態。
+另外 `predict.py` 目前設定：`HISTORY_SIZE = 8`，所以 history 最多保留最近 8 筆狀態。
 
 ---
 
@@ -868,13 +836,7 @@ if near_border and moving_outward:
 recent = valid_history[-stale_frames:]
 ```
 
-目前：
-
-```python
-stale_frames = 6
-```
-
-也就是檢查最近 6 個有效球點。
+目前：`stale_frames = 6`，也就是檢查最近 6 個有效球點。
 
 接著計算三個值：
 
