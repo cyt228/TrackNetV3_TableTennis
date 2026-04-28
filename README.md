@@ -6,6 +6,8 @@ TrackNetV3 主要由兩個模型組成：
 
 [模型下載](https://1drv.ms/u/c/ab3b33d5410e04f3/IQCwzwpuGP6pSpgw0VyyRSCzAa4jTyVFYiFWUgSd8gPeCf0?e=hWQh7G)
 
+---
+
 ## 主要內容
 
 從原版 TrackNetV3 修改而來，目前主要修改重點放在：
@@ -30,6 +32,8 @@ train 相關流程基本沿用原版 TrackNetV3，之後如果要重新訓練，
 
 [speed analysis](./speed_analysis) 的詳細介紹另外放在 `speed_analysis/`中
 
+---
+
 ## 檔案說明
 
 | 檔案 / 資料夾 | 用途 |
@@ -46,6 +50,8 @@ train 相關流程基本沿用原版 TrackNetV3，之後如果要重新訓練，
 | `error_analysis.py` | 原版 error analysis 介面 |
 | `requirements.txt` | 環境套件 |
 | `speed_analysis/` | 速度、落點、stroke 分析 |
+
+---
 
 ## predict.py 使用方式
 
@@ -97,6 +103,8 @@ csv 格式：
 | `Y` | 球的 y 座標 |
 | `Inpaint_Mask` | 有沒有做 inpaint ，1 代表有，0 代表沒有 |
 
+---
+
 ## 修改 / 新增的核心邏輯
 這部分主要說明本專案為了讓 TrackNetV3 更適合桌球影片，額外修改或新增的後處理邏輯。主要包含：
 
@@ -125,7 +133,6 @@ Y = 0
 
 所以這邊的設計是只補「前後都有球」的短暫缺失片段，也就是：`有球 → 短暫消失 → 有球`，這種情況才會補。
 
----
 
 #### Function 參數
 
@@ -160,7 +167,6 @@ tracknet_pred_dict['Inpaint_Mask'] = generate_inpaint_mask(
 )
 ```
 
----
 
 #### 參數說明
 
@@ -176,7 +182,6 @@ tracknet_pred_dict['Inpaint_Mask'] = generate_inpaint_mask(
 | `angle_check_min_gap` | `4` | `14` | gap 長度達到這個值才做方向檢查 |
 | `max_reverse_dx` | `40.0` | `40.0` | 較長 gap 前後 x 方向明顯反轉時的判斷門檻 |
 
----
 
 #### 參數調整建議
 
@@ -192,7 +197,6 @@ tracknet_pred_dict['Inpaint_Mask'] = generate_inpaint_mask(
 | 想讓比較短的 gap 也檢查方向 | 調小 `angle_check_min_gap` |
 | 短 gap 被方向限制擋掉 | 調大 `angle_check_min_gap` |
 
----
 
 #### 補洞流程
 
@@ -218,7 +222,6 @@ tracknet_pred_dict['Inpaint_Mask'] = generate_inpaint_mask(
 產生 Inpaint_Mask
 ```
 
----
 
 #### 目前設計重點
 
@@ -236,7 +239,6 @@ tracknet_pred_dict['Inpaint_Mask'] = generate_inpaint_mask(
 
 桌球球速快，frame 之間位移可能比較大。 如果補洞條件太嚴格，很多真正的短暫 miss 會補不到。
 
----
 
 #### 注意事項
 
@@ -276,7 +278,6 @@ InpaintNet 補軌跡
 
 如果只選 heatmap 中面積最大的點，很容易在球消失、球速快、背景干擾多的情況下選錯。所以這裡的設計不是單純選最大的 candidate，而是會根據前面的軌跡 `history` 判斷哪一個候選點最合理。
 
----
 
 #### 前一階段：`predict_location_candidates()`
 
@@ -293,7 +294,6 @@ candidates = predict_location_candidates(
 
 也就是每個 frame 最多先保留 3 個候選球點，再交給 `select_best_candidate()` 判斷哪一個最合理。
 
----
 
 #### Function 參數
 
@@ -310,7 +310,6 @@ def select_best_candidate(
 ):
 ```
 
----
 
 #### 參數說明
 
@@ -329,7 +328,6 @@ def select_best_candidate(
 
 代表 `history` 最多只保留最近 8 筆追蹤狀態，避免太久以前的軌跡影響目前選點。
 
----
 
 #### 基本選點流程
 
@@ -357,7 +355,6 @@ def select_best_candidate(
 選出最接近預測位置的 candidate
 ```
 
----
 
 #### y 範圍限制
 
@@ -383,8 +380,6 @@ max_y = 900
 太下方的反光
 畫面中不可能是球的位置
 ```
-
----
 
 #### 沒有 history 時的選點方式
 
@@ -415,8 +410,6 @@ reset 之後
 前面都沒有成功偵測到球
 ```
 
----
-
 #### 有 history 時的選點方式
 
 如果已經有有效球點，會使用上一個球的位置作為判斷基準：
@@ -441,7 +434,6 @@ pred_y = last_y + hist_dy
 
 也就是假設球會大致延續上一段的移動方向。 後面選 candidate 時，會優先選接近這個預測位置的點。
 
----
 
 #### 根據 `miss_count` 放寬 x 方向距離
 
@@ -466,7 +458,6 @@ else:
 
 這樣設計的原因是球如果連續幾個 frame 沒被偵測到，重新出現時會離上一個位置比較遠，所以 miss 越久，x 方向限制會越寬鬆。
 
----
 
 #### candidate 過濾條件
 
@@ -483,8 +474,6 @@ if area < min_area_with_history:
 
 有 history 時，候選點面積至少要大於等於 2。
 
----
-
 ##### 2. y 方向跳太遠不選
 
 ```python
@@ -494,8 +483,6 @@ if y_to_last > 100:
 
 如果候選點和上一個球點的 y 距離超過 100 pixel，就不選。
 
----
-
 ##### 3. x 方向跳太遠不選
 
 ```python
@@ -504,8 +491,6 @@ if x_to_last > max_x_gap:
 ```
 
 如果候選點和上一個球點的 x 距離超過目前允許的 `max_x_gap`，就不選。
-
----
 
 ##### 4. 沒有 miss 時，避免方向突然反轉
 
@@ -529,8 +514,6 @@ if hist_dx < -12 and dx > 12:
     continue
 ```
 
----
-
 ##### 5. 沒有 miss 時，candidate 不能離預測位置太遠
 
 同樣只在以下情況檢查：
@@ -553,8 +536,6 @@ if x_to_pred > 120 or y_to_pred > 80:
 | `x_to_pred` | `120` |
 | `y_to_pred` | `80` |
 
----
-
 #### reset 後的選點方式
 
 如果 `should_reset_track()` 判斷需要 reset，`predict.py` 會把選點用的 history 清空：
@@ -567,8 +548,6 @@ select_miss_count = 0 if need_reset else track_state["miss_count"]
 意思是 reset 後不再用舊軌跡限制 candidate，而是讓 `select_best_candidate()` 用「沒有 history」的方式重新選球。
 
 這樣可以避免錯誤軌跡一直影響後面的選點。
-
----
 
 #### 最後如何選出 best candidate
 
@@ -597,8 +576,6 @@ best = min(
 
 也就是說，這裡不是單純選最大面積，而是優先選軌跡最合理的點。
 
----
-
 #### 參數調整建議
 
 | 問題 | 建議調整 |
@@ -611,8 +588,6 @@ best = min(
 | 球方向變化大但被擋掉 | 放寬方向反轉條件 |
 | y 方向跳動較大導致抓不到 | 放寬 `y_to_last > 100` 的限制 |
 | reset 後又選回同一個背景球 | 參考 `should_reset_track()` 裡的 ignore stale 設定 |
-
----
 
 #### 設計重點
 
@@ -647,8 +622,6 @@ heatmap 有多個亮點
 
 如果程式繼續相信目前的 history，後面的 `select_best_candidate()` 可能會一直根據錯誤的上一點去選球，導致整段軌跡都偏掉。所以 `should_reset_track()` 的目的就是：當目前軌跡看起來已經不可信時，清掉追蹤狀態，重新開始找球。
 
----
-
 #### Function 參數
 
 ```python
@@ -680,8 +653,6 @@ need_reset, reset_reason = should_reset_track(
 )
 ```
 
----
-
 #### 參數說明
 
 | 參數 | 目前值 | 說明 |
@@ -695,8 +666,6 @@ need_reset, reset_reason = should_reset_track(
 | `stale_y_span_thresh` | `12.0` | 最近幾個有效球點的 y 方向最大變化門檻 |
 | `stale_x_span_thresh` | `35.0` | 最近幾個有效球點的 x 方向最大變化門檻 |
 | `debug` | `False` | 是否輸出 reset 原因 |
-
----
 
 #### track_state 狀態
 
@@ -720,8 +689,6 @@ track_state = {
 
 另外 `predict.py` 目前設定：`HISTORY_SIZE = 8`，所以 history 最多保留最近 8 筆狀態。
 
----
-
 #### 回傳值
 
 ```python
@@ -739,8 +706,6 @@ return need_reset, reset_reason
 |---|---|
 | `"border_out"` | 球靠近邊界，而且移動方向是往畫面外 |
 | `"stale_ball"` | 最近幾個球點幾乎不動，可能追到背景球或停留的錯誤點 |
-
----
 
 #### 基本 reset 流程
 
@@ -767,8 +732,6 @@ return need_reset, reset_reason
 ↓
 其他情況不 reset
 ```
-
----
 
 #### 1. 邊界 reset：`border_out`
 
@@ -824,7 +787,6 @@ if near_border and moving_outward:
 
 這樣可以避免球已經飛出畫面後，程式還繼續沿用舊的 history 去追錯點。
 
----
 
 #### 2. 停滯 reset：`stale_ball`
 
@@ -876,8 +838,6 @@ if (
 
 真正的高速桌球通常不會連續好幾個有效點都幾乎停在同一個小範圍內，所以這種情況通常代表追蹤已經不可靠。
 
----
-
 #### 3. stale reset 後暫時忽略舊位置
 
 這是 `predict.py` 裡額外做的處理，不是在 `should_reset_track()` function 裡面。
@@ -920,8 +880,6 @@ track_state["ignore_stale_until"] = -1
 track_state["ignore_stale_pos"] = None
 ```
 
----
-
 #### reset 後對選點的影響
 
 如果 `should_reset_track()` 回傳需要 reset，`predict.py` 會把這一輪傳進 `select_best_candidate()` 的 history 清空：
@@ -953,8 +911,6 @@ track_state["history"] = [(cx_pred, cy_pred, 1)]
 track_state["miss_count"] = 0
 ```
 
----
-
 #### 參數調整建議
 
 | 問題 | 建議調整 |
@@ -968,7 +924,6 @@ track_state["miss_count"] = 0
 | stale reset 後又選回同一個錯誤點 | 加大 ignore stale 範圍，或延長 `ignore_stale_until` |
 | stale reset 後正確球剛好在舊位置附近，導致選不到 | 縮小 ignore stale 範圍，或縮短 `ignore_stale_until` |
 
----
 
 #### 設計重點
 

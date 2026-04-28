@@ -558,7 +558,7 @@ def process_single_video(
     ball_csv,
     save_dir,
     min_left_segments=5,
-    min_candidate_frames=52,
+    min_candidate_frames=50,
     max_step_th=130.0,
     max_abs_dy_th=45.0,
     left_half_ratio=0.5,
@@ -629,7 +629,7 @@ def process_video_root(
     video_root,
     csv_suffixes=("_ball.csv", "_bass.csv"),
     min_left_segments=5,
-    min_candidate_frames=52,
+    min_candidate_frames=50,
     max_step_th=130.0,
     max_abs_dy_th=45.0,
     left_half_ratio=0.5,
@@ -687,7 +687,7 @@ def parse_args():
     parser.add_argument("--video_root", type=str, default=None)
     parser.add_argument("--csv_suffixes", type=str, nargs="+", default=["_ball.csv", "_bass.csv"])
     parser.add_argument("--min_left_segments", type=int, default=5)
-    parser.add_argument("--min_candidate_frames", type=int, default=52)
+    parser.add_argument("--min_candidate_frames", type=int, default=50)
     parser.add_argument("--max_step_th", type=float, default=130.0)
     parser.add_argument("--max_abs_dy_th", type=float, default=45.0)
     parser.add_argument("--left_half_ratio", type=float, default=0.5)

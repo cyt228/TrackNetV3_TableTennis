@@ -320,7 +320,7 @@ def detect_strokes_from_runs(
 
             if best is not None:
                 frame_end = int(df.iloc[best["end_idx"]]["Frame"])
-                if frame_end - frame_start + 1 >= min_candidate_frames:
+                if frame_end - frame_start + 1 > min_candidate_frames:
                     end_x = float(df.iloc[best["end_idx"]]["X"])
                     right_x_limit = frame_w * float(right_side_ratio)
 
@@ -338,7 +338,7 @@ def detect_strokes_from_runs(
                 continue
 
             frame_end = int(df.iloc[run_e]["Frame"])
-            if frame_end - frame_start + 1 >= min_candidate_frames:
+            if frame_end - frame_start + 1 > min_candidate_frames:
                 strokes.append(make_stroke(stroke_id, s, run_e, frame_start, None, frame_end, run_e, 0, 0, "no_hit"))
                 stroke_id += 1
             break

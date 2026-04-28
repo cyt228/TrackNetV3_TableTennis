@@ -469,6 +469,51 @@ python speed_analysis/plot_speed.py --input path/to/xxx_stroke_zone.csv --speed 
 
 ---
 
+## 可調整參數
+
+目前大部分參數已經針對這批影片調整過，通常可以先用預設值跑。只有在 stroke、table zone、net zone 或速度結果明顯不合理時，再依照下面表格調整。
+
+### stroke_zone_analysis.py 主要參數
+
+| 參數 | 目前預設值 | 建議範圍 | 作用 | 什麼時候調 |
+|---|---:|---:|---|---|
+| `min_left_segments` | `5` | `3 ~ 8` | hit 前至少要有幾段往左移動，才會被視為可能的 stroke start | 假 stroke 太多就調大；真正 stroke 被漏掉就調小 |
+| `min_candidate_frames` | `52` | `35 ~ 70` | 一個 stroke 至少要持續幾個 frame 才保留 | 太短的假 stroke 太多就調大；短球被漏掉就調小 |
+| `max_step_th` | `130.0` | `100 ~ 160` | 相鄰 frame 最大允許位移，避免跳點 | 球速快、容易斷就調大；跳點太多就調小 |
+| `max_abs_dy_th` | `45.0` | `35 ~ 70` | hit 前往左移動時，y 方向最大允許變化 | 高拋或角度變化大就調大；亂點太多就調小 |
+| `left_half_ratio` | `0.5` | `0.45 ~ 0.55` | hit frame 必須發生在畫面左半邊的比例範圍 | hit 太晚就調小；hit 抓不到就調大 |
+| `right_side_ratio` | `0.5` | `0.5 ~ 0.7` | stroke end 至少要到畫面右側多少比例，才算有效 stroke | 假 stroke 太多就調大；有效 stroke 被標成 `no_hit` 就調小 |
+| `zone_window` | `2` | `1 ~ 5` | 偵測 table / net zone 時，取 hit frame 前後幾個 frame 平均 | table 偵測不穩就調大；畫面變化大就調小 |
+| `up_px` | `140` | `100 ~ 180` | net-front zone 往上延伸的高度 | net zone 太小抓不到速度就調大；抓到太多非網前區域就調小 |
+| `left_shift_px` | `160` | `120 ~ 220` | net-front zone 往左延伸的寬度 | net zone 沒涵蓋球過網區域就調大；範圍太大就調小 |
+
+### 速度相關固定值
+
+| 參數 | 目前值 | 建議範圍 | 作用 | 什麼時候調 |
+|---|---:|---:|---|---|
+| `MAX_SPEED_KMH` | `115.0` | `100 ~ 120` | 過濾不合理的速度異常值 | 如果明顯錯點造成速度爆高，就調低；如果合理高速球被濾掉，就調高 |
+| `TABLE_W` | `274.0` | 不建議調 | 標準桌球桌長度 cm | 固定值 |
+| `TABLE_H` | `152.5` | 不建議調 | 標準桌球桌寬度 cm | 固定值 |
+| `scale = sx + 0.25 * (sy - sx)` | `0.25` | `0.2 ~ 0.4` | x/y 比例混合，用來讓速度換算不要過低或過高 | 速度整體偏低可略調大；速度整體偏高可略調小 |
+
+### stroke_analysis.py 內部判斷值
+
+這些目前不是 CLI 參數，而是寫在程式內部。通常不需要改，除非 stroke 判斷明顯不穩。
+
+| 變數 | 目前值 | 建議範圍 | 作用 |
+|---|---:|---:|---|
+| `right_x_th` | `frame_w * 0.65` | `0.6 ~ 0.75` | bounce 必須出現在畫面右側，避免把 hit 附近誤判成 bounce |
+| `max_backward_tol` | `12.0` | `8 ~ 20` | hit 後允許少量往回移動 |
+| `max_nonforward_count` | `3` | `2 ~ 5` | hit 後最多允許幾次非向右移動 |
+| `local_window` | `3` | `2 ~ 5` | hit 附近檢查局部最低點的範圍 |
+| `future_window` | `8` | `6 ~ 12` | hit 後檢查球是否穩定往右的範圍 |
+| `min_rise_px` | `80.0` | `60 ~ 120` | hit 後 x 至少要往右增加多少 pixel |
+| `min_net_right` | `3` | `2 ~ 5` | hit 後往右移動次數需大於往左移動次數多少 |
+| `abs(dx) > 140` | `140` | `120 ~ 180` | 過濾 hit 後不合理 x 大跳 |
+| `abs(dy) > 60` | `60` | `50 ~ 90` | 過濾 hit 後不合理 y 大跳 |
+
+---
+
 ## 目前限制與注意事項
 
 目前這套 speed analysis 是為了這批影片設計的，因此有幾個限制需要注意：
