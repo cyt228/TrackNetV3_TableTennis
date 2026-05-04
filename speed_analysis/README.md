@@ -4,6 +4,8 @@
 
 目前這一套分析流程是針對這批桌球影片場景設計，也就是固定視角、固定球桌位置、球主要由左往右飛行的影片。若要換成其他場地、不同鏡頭角度或不同桌面顏色，可能會需要重新調整 table detection、net zone 與 stroke 判斷參數。
 
+> nonoverlap branch 中，`speed_analysis` 的主流程仍然是 `stroke_zone_analysis.py`，但批次模式、輸入配對方式，以及部分 stroke / zone 參數有更新。因此本 README 保留原本 speed analysis 的內容，再補上目前版本有差異的參數與 root mode 執行方式。
+
 ---
 
 ## 主要檔案說明
@@ -16,8 +18,7 @@
 | `table_analysis.py` | 單獨檢查 table / net zone 偵測結果，可輸出 zone CSV 與 overlay 影片 |
 | `bounce_landing_analysis.py` | 根據 bounce frame 判斷球是否落在桌面內，並輸出落點區域 |
 | `plot_speed.py` | 將 `stroke_zone.csv` 中的速度欄位畫成折線圖，方便觀察每個 stroke 的速度變化 |
-
-> `plot_compare_speed.py` 是之前測試 raw / corr 速度比較時使用的獨立工具，目前主流程沒有呼叫
+| `plot_compare_speed.py` | 之前測試 raw / corr 速度比較時使用的獨立工具，目前主流程沒有呼叫 |
 
 ---
 
@@ -41,9 +42,34 @@
 | `X` | 球心 x 座標 |
 | `Y` | 球心 y 座標 |
 
+### nonoverlap branch 的批次輸入補充
+
+目前 `stroke_zone_analysis.py` 的 root mode 不是直接掃描預測結果資料夾中的 `*_predict.mp4`，而是先掃描原始影片資料夾 `--video_root` 底下的 `.mp4`，再根據相同的相對路徑到 `--save_root` 中找對應 CSV。
+
+也就是說，root mode 會做下面這件事：
+
+```txt
+video_root/資料夾/xxx.mp4
+        ↓
+save_root/資料夾/xxx_ball.csv
+或
+save_root/資料夾/xxx_bass.csv
+```
+
+目前可接受的 CSV suffix 預設為：
+
+```txt
+_ball.csv
+_bass.csv
+```
+
+如果沒有找到對應 CSV，該影片會被跳過，不會中斷整批分析。
+
 ---
 
 ## 執行方式
+
+請在專案根目錄執行，也就是 `TrackNetV3_TableTennis/` 底下。
 
 ### 單一影片分析
 
@@ -51,17 +77,63 @@
 python speed_analysis/stroke_zone_analysis.py --video_file path/to/xxx_predict.mp4 --ball_csv path/to/xxx_ball.csv --save_dir path/to/output_dir --save_video
 ```
 
-### 整個資料夾批次分析
+不需要輸出視覺化影片時，可以拿掉 `--save_video`：
 
 ```bash
-python speed_analysis/stroke_zone_analysis.py --video_root path/to/pred_result_folder --save_video
+python speed_analysis/stroke_zone_analysis.py --video_file path/to/xxx_predict.mp4 --ball_csv path/to/xxx_ball.csv --save_dir path/to/output_dir
 ```
 
-批次模式會自動尋找資料夾底下的：`*_predict.mp4`
+### 整個資料夾批次分析
 
-並尋找同資料夾中對應的：`*_ball.csv`，如果找不到對應 CSV，該影片會被跳過。
+nonoverlap branch 的 root mode 需要同時指定：
 
-不要存影片的話就不要寫 `--save_video`
+| 參數 | 說明 |
+|---|---|
+| `--video_root` | 原始影片所在資料夾，程式會遞迴尋找底下的 `.mp4` |
+| `--save_root` | TrackNetV3 預測結果所在資料夾，也是輸出 speed analysis 結果的位置 |
+
+範例：
+
+```bash
+python speed_analysis/stroke_zone_analysis.py --video_root /home/code-server/NO7 --save_root /home/code-server/NO7_pred_result --save_video
+```
+
+如果不需要輸出 debug 影片：
+
+```bash
+python speed_analysis/stroke_zone_analysis.py --video_root /home/code-server/NO7 --save_root /home/code-server/NO7_pred_result
+```
+
+批次模式會自動尋找 `--video_root` 底下的原始影片，例如：
+
+```txt
+/home/code-server/NO7/C0001.mp4
+/home/code-server/NO7/group1/C0002.mp4
+```
+
+然後到 `--save_root` 中尋找對應的球軌跡 CSV，例如：
+
+```txt
+/home/code-server/NO7_pred_result/C0001_ball.csv
+/home/code-server/NO7_pred_result/group1/C0002_ball.csv
+```
+
+如果找到對應 CSV，分析結果會輸出到同一個 `save_root` 對應資料夾中。
+
+### 指定 CSV suffix
+
+預設會尋找：
+
+```txt
+_ball.csv
+_bass.csv
+```
+
+如果你的輸出命名不同，可以用 `--csv_suffixes` 指定：
+
+```bash
+python speed_analysis/stroke_zone_analysis.py --video_root /home/code-server/NO7 --save_root /home/code-server/NO7_pred_result --csv_suffixes _ball.csv _bass.csv --save_video
+```
 
 ---
 
@@ -89,6 +161,28 @@ python speed_analysis/stroke_zone_analysis.py --video_root path/to/pred_result_f
 | `valid` | 是否為有效 stroke |
 | `note` | 額外註記，例如 `no_hit`、`net_hit`、`net_stop` |
 
+### nonoverlap branch 中 stroke 判斷參數更新
+
+目前 CLI 預設參數如下：
+
+| 參數 | 目前預設值 | 說明 |
+|---|---:|---|
+| `min_left_segments` | `5` | hit 前至少要有幾段往左移動，才會被視為可能的 stroke start |
+| `min_candidate_frames` | `40` | 一個 stroke 至少要持續幾個 frame 才保留 |
+| `max_step_th` | `130.0` | 相鄰 frame 最大允許位移，避免跳點 |
+| `max_abs_dy_th` | `45.0` | hit 前往左移動時，y 方向最大允許變化 |
+| `left_half_ratio` | `0.3` | hit frame 必須發生在畫面左側多少比例內 |
+| `right_side_ratio` | `0.5` | stroke end 至少要到畫面右側多少比例，才算有效 stroke |
+
+與前一版比較，這版比較明顯的差異是：
+
+| 項目 | 調整重點 |
+|---|---|
+| `min_candidate_frames` | 從原本較保守的長度調整為 `40`，避免短一點但合理的 stroke 被濾掉 |
+| `left_half_ratio` | 調整為 `0.3`，讓 hit 更偏向左側發生，符合目前資料中左到右擊球的情境 |
+| root mode | 新增 `--save_root`，讓原始影片資料夾與預測結果資料夾可以分開 |
+| CSV 對應 | root mode 會依照原始影片相對路徑到 `save_root` 尋找 `_ball.csv` 或 `_bass.csv` |
+
 ---
 
 ## Table / Net Zone 偵測
@@ -110,6 +204,20 @@ xxx_zone_detail.csv
 ```
 
 其中包含每個 stroke 對應的 table corners 與 net-front zone 座標。
+
+### Table / Net Zone 參數
+
+目前 `stroke_zone_analysis.py` 中跟 zone 有關的 CLI 預設值如下：
+
+| 參數 | 目前預設值 | 說明 |
+|---|---:|---|
+| `zone_window` | `2` | 偵測 table / net zone 時，取 hit frame 前後幾個 frame 平均 |
+| `up_px` | `140` | net-front zone 往上延伸的高度 |
+| `left_shift_px` | `160` | net-front zone 往左延伸的寬度 |
+
+`zone_window = 2` 代表會以 hit frame 為中心，往前後最多取 2 frame 的 table / net zone 偵測結果，再做平均。這樣可以降低單一 frame 偵測失敗或桌線不穩造成的誤差。
+
+`up_px` 和 `left_shift_px` 會影響 net-front zone 的大小。如果 `net_zone_max_speed_kmh` 常常抓不到，可以優先檢查 net zone 是否太小；如果抓到太多非網前區域的速度，則可能代表 net zone 範圍太大。
 
 ### 重要限制
 
@@ -138,9 +246,9 @@ xxx_zone_detail.csv
 
 ## 速度分析
 
-速度使用的 frame 是從 hit_frame 到 bounce_frame，如果沒有 bounce_frame 就是算到 frame_end，主要為了避免 avg_speed 在計算時因彈跳後速度下降的問題
+速度使用的 frame 是從 `hit_frame` 到 `bounce_frame`，如果沒有 `bounce_frame` 就是算到 `frame_end`，主要是為了避免 avg_speed 在計算時受到彈跳後速度下降的影響。
 
-這邊的設計會有一個問題是如果是打到網子的情況，很有可能因為彈跳幅度不夠，所以沒有被判斷成 bounce_frame，這種情況的 avg_speed 會略低，但我們主要是在意 net_zone_max_speed，所以這部份沒有去進行改善
+這邊的設計會有一個問題：如果是打到網子的情況，很有可能因為彈跳幅度不夠，所以沒有被判斷成 `bounce_frame`。這種情況的 `avg_speed_kmh` 可能會略低，但目前主要關注的是 `net_zone_max_speed_kmh`，所以這部分沒有特別改善。
 
 ### 速度計算方式
 
@@ -153,8 +261,7 @@ TABLE_W = 274.0 cm
 TABLE_H = 152.5 cm
 ```
 
-程式會根據偵測到的 table corners 估算 pixel 到 cm 的比例。
-目前會計算：
+程式會根據偵測到的 table corners 估算 pixel 到 cm 的比例。目前會計算：
 
 ```txt
 sx_cm_per_px
@@ -165,6 +272,15 @@ sy_cm_per_px
 |---|---|
 | `sx_cm_per_px` | x 方向的 cm / pixel 比例 |
 | `sy_cm_per_px` | y 方向的 cm / pixel 比例 |
+
+目前 `compute_fixed_scales()` 的做法是根據桌面四邊計算比例，並取較大的比例作為該方向的換算值：
+
+```txt
+sx = max(top_sx, bottom_sx)
+sy = max(left_sy, right_sy)
+```
+
+這樣做是為了避免因為畫面透視或某一邊桌線較短，導致速度被過度低估。
 
 實際速度計算時，會使用混合比例：
 
@@ -184,27 +300,33 @@ speed_kmh = distance_cm / time_sec * 0.036
 
 其中 `0.036` 是將 `cm/s` 轉換成 `km/h` 的係數。
 
-
 ### 速度取樣方式
 
 目前每個 frame 會嘗試計算多種速度候選：
 
 | 類型 | 說明 |
 |---|---|
-| `1f` | 使用相鄰 1 frame 的位移計算速度。當前 frame 為 T，用的就是 T ~ T+1|
-| `2f` | 使用間隔 2 frame 的位移計算速度。當前 frame 為 T，用的就是 T ~ T+2|
-| `c2f` | 使用前後各 1 frame，也就是 centered 2-frame 的方式計算速度。當前 frame 為 T，用的就是 T-1 ~ T+1|
+| `1f` | 使用相鄰 1 frame 的位移計算速度。當前 frame 為 T，用的是 T-1 ~ T |
+| `2f` | 使用間隔 2 frame 的位移計算速度。當前 frame 為 T，用的是 T ~ T+2 |
+| `c2f` | 使用前後各 1 frame，也就是 centered 2-frame 的方式計算速度。當前 frame 為 T，用的是 T-1 ~ T+1 |
 
 每個 frame 會從這些速度候選中選擇較大的合理速度作為該 frame 的代表速度。
 
-目前有速度上限過濾：`MAX_SPEED_KMH = 115.0`
+目前有速度上限過濾：
+
+```txt
+MAX_SPEED_KMH = 115.0
+```
 
 如果某段速度超過上限，會被視為不合理資料並排除，避免錯誤偵測點造成速度異常放大。
 
-
 ### 速度輸出欄位
 
-主要速度結果會輸出在：`xxx_stroke_zone.csv`
+主要速度結果會輸出在：
+
+```txt
+xxx_stroke_zone.csv
+```
 
 常見欄位如下：
 
@@ -218,7 +340,11 @@ speed_kmh = distance_cm / time_sec * 0.036
 | `zone_label` | 落點區域 |
 | `in_table` | 是否落在桌面內 |
 
-另外會輸出更詳細的速度比較資料：`xxx_stroke_speed_compare.csv`
+另外會輸出更詳細的速度比較資料：
+
+```txt
+xxx_stroke_speed_compare.csv
+```
 
 常見欄位如下：
 
@@ -232,7 +358,6 @@ speed_kmh = distance_cm / time_sec * 0.036
 | `net_zone_max_speed_c2f_kmh` | net zone 中 c2f 計算出的最大速度 |
 | `sx_cm_per_px` | x 方向 cm / pixel 比例 |
 | `sy_cm_per_px` | y 方向 cm / pixel 比例 |
-
 
 ### Net Zone Max Speed
 
@@ -267,7 +392,7 @@ speed_kmh = distance_cm / time_sec * 0.036
 
 其中 `bounce_frame` 會用來找出該次擊球的落點 frame，再從 `ball.csv` 中取得該 frame 的球心座標。
 
-**這部分已經融合進 `stroke_zone_analyziz.py` 中了，所以不須單獨的執行**
+**這部分已經融合進 `stroke_zone_analysis.py` 中了，所以一般情況不需要單獨執行。**
 
 ### Perspective Transform
 
@@ -300,7 +425,11 @@ TABLE_H = 152.5 cm
 
 ### 落點區域切分
 
-轉換成桌面座標後，程式會將桌面切成：`6 × 3 = 18 格`
+轉換成桌面座標後，程式會將桌面切成：
+
+```txt
+6 × 3 = 18 格
+```
 
 也就是：
 
@@ -309,7 +438,11 @@ TABLE_H = 152.5 cm
 | 橫向 | 6 等分 | 區分近網、中場、底線等深度位置 |
 | 縱向 | 3 等分 | 區分左、中、右路線 |
 
-區域標籤格式為：`C1R1 ~ C6R3`
+區域標籤格式為：
+
+```txt
+C1R1 ~ C6R3
+```
 
 其中：
 
@@ -324,13 +457,21 @@ TABLE_H = 152.5 cm
 
 如果 `bounce_frame` 當下球不可見，也就是 `Visibility = 0`，程式不會直接放棄，而是會往前後搜尋附近 frame 的球座標。
 
-目前的設計是：`bounce_frame ± 2 frames`
+目前的設計是：
+
+```txt
+bounce_frame ± 2 frames
+```
 
 也就是在 bounce frame 前後 2 幀內，尋找最近的可見球點。
 
 如果找到可見球點，就使用該點作為落點座標。如果找不到，或是 perspective transform 失敗，則該 stroke 的落點會被標記為無效。
 
-另外，如果轉換後的 `(x_cm, y_cm)` 超出桌面範圍，也會標記為：`in_table = False`
+另外，如果轉換後的 `(x_cm, y_cm)` 超出桌面範圍，也會標記為：
+
+```txt
+in_table = False
+```
 
 代表該球可能是出界球，或是 bounce frame / table detection 有誤。
 
@@ -422,7 +563,11 @@ TABLE_H = 152.5 cm
 
 ## 視覺化輸出
 
-分析完成後會輸出一支視覺化影片：`xxx_stroke_zone_visualize.mp4`
+分析完成後會輸出一支視覺化影片：
+
+```txt
+xxx_stroke_zone_visualize.mp4
+```
 
 影片中會標示：
 
@@ -445,7 +590,11 @@ TABLE_H = 152.5 cm
 python speed_analysis/plot_speed.py --input path/to/xxx_stroke_zone.csv
 ```
 
-預設會畫：`net_zone_max_speed_kmh`
+預設會畫：
+
+```txt
+net_zone_max_speed_kmh
+```
 
 如果要改畫其他速度欄位，可以使用 `--speed`：
 
@@ -453,10 +602,22 @@ python speed_analysis/plot_speed.py --input path/to/xxx_stroke_zone.csv
 python speed_analysis/plot_speed.py --input path/to/xxx_stroke_zone.csv --speed max_speed_kmh
 ```
 
-也可以直接輸入資料夾，程式會自動尋找底下所有： `*_stroke_zone.csv`，並分別輸出折線圖。
+也可以直接輸入資料夾，程式會自動尋找底下所有：
+
+```txt
+*_stroke_zone.csv
+```
+
+並分別輸出折線圖。
 
 ```bash
 python speed_analysis/plot_speed.py --input path/to/folder
+```
+
+root 結果資料夾的範例：
+
+```bash
+python speed_analysis/plot_speed.py --input /home/code-server/NO7_pred_result --speed net_zone_max_speed_kmh
 ```
 
 ![net_zone_max_speed](../images/C0050_predict_stroke_zone_net_zone_max_speed_kmh_line.png)
@@ -489,14 +650,23 @@ python speed_analysis/plot_speed.py --input path/to/folder
 | 參數 | 目前預設值 | 建議範圍 | 作用 | 什麼時候調 |
 |---|---:|---:|---|---|
 | `min_left_segments` | `5` | `3 ~ 8` | hit 前至少要有幾段往左移動，才會被視為可能的 stroke start | 假 stroke 太多就調大；真正 stroke 被漏掉就調小 |
-| `min_candidate_frames` | `50` | `35 ~ 70` | 一個 stroke 至少要持續幾個 frame 才保留 | 太短的假 stroke 太多就調大；短球被漏掉就調小 |
+| `min_candidate_frames` | `40` | `35 ~ 70` | 一個 stroke 至少要持續幾個 frame 才保留 | 太短的假 stroke 太多就調大；短球被漏掉就調小 |
 | `max_step_th` | `130.0` | `100 ~ 160` | 相鄰 frame 最大允許位移，避免跳點 | 球速快、容易斷就調大；跳點太多就調小 |
 | `max_abs_dy_th` | `45.0` | `35 ~ 70` | hit 前往左移動時，y 方向最大允許變化 | 高拋或角度變化大就調大；亂點太多就調小 |
-| `left_half_ratio` | `0.5` | `0.45 ~ 0.55` | hit frame 必須發生在畫面左半邊的比例範圍 | hit 太晚就調小；hit 抓不到就調大 |
+| `left_half_ratio` | `0.3` | `0.25 ~ 0.5` | hit frame 必須發生在畫面左側比例範圍內 | hit 太晚就調小；hit 抓不到就調大 |
 | `right_side_ratio` | `0.5` | `0.5 ~ 0.7` | stroke end 至少要到畫面右側多少比例，才算有效 stroke | 假 stroke 太多就調大；有效 stroke 被標成 `no_hit` 就調小 |
 | `zone_window` | `2` | `1 ~ 5` | 偵測 table / net zone 時，取 hit frame 前後幾個 frame 平均 | table 偵測不穩就調大；畫面變化大就調小 |
 | `up_px` | `140` | `100 ~ 180` | net-front zone 往上延伸的高度 | net zone 太小抓不到速度就調大；抓到太多非網前區域就調小 |
 | `left_shift_px` | `160` | `120 ~ 220` | net-front zone 往左延伸的寬度 | net zone 沒涵蓋球過網區域就調大；範圍太大就調小 |
+
+### root mode 相關參數
+
+| 參數 | 目前預設值 | 作用 |
+|---|---:|---|
+| `--video_root` | 無 | 原始影片所在資料夾，root mode 必填 |
+| `--save_root` | 無 | 預測結果與輸出結果所在資料夾，root mode 必填 |
+| `--csv_suffixes` | `_ball.csv _bass.csv` | 指定要配對的球軌跡 CSV suffix |
+| `--save_video` | 預設不開啟 | 是否輸出 `xxx_stroke_zone_visualize.mp4` |
 
 ### 速度相關固定值
 
@@ -525,24 +695,47 @@ python speed_analysis/plot_speed.py --input path/to/folder
 
 ---
 
+## nonoverlap branch 差異整理
+
+這一版的 `speed_analysis` 主要不是改速度公式本身，而是更新批次執行、資料配對與部分預設參數。
+
+| 類別 | 差異 |
+|---|---|
+| root mode | 批次執行時需要同時給 `--video_root` 和 `--save_root` |
+| 資料配對 | 由原始影片路徑推回 `save_root` 找相同相對路徑的 CSV |
+| CSV suffix | 預設支援 `_ball.csv` 和 `_bass.csv` |
+| stroke 長度 | `min_candidate_frames` 目前為 `40` |
+| hit 位置 | `left_half_ratio` 目前為 `0.3`，比原本更限制 hit 出現在左側 |
+| right side | CLI 預設 `right_side_ratio` 為 `0.5` |
+| net zone | `zone_window=2`、`up_px=140`、`left_shift_px=160` |
+| 速度上限 | `MAX_SPEED_KMH=115.0` |
+
+---
+
 ## 目前限制與注意事項
 
 目前這套 speed analysis 是為了這批影片設計的，因此有幾個限制需要注意：
 
-1. **Table detection 不是通用方法**  
+1. **Table detection 不是通用方法**
+
    目前 table / net 偵測是依照現有影片的視角、桌面顏色、線條位置調整的。如果換場地或換鏡頭，可能需要重新調整參數。
 
-2. **速度是 2D 平面估計**  
+2. **速度是 2D 平面估計**
+
    目前速度主要根據畫面中的 2D 軌跡與球桌比例換算，沒有真正估計球的 3D 高度。因此球離桌面越高，透視投影造成的誤差可能越明顯。
 
-3. **目前假設主要是左到右擊球**  
+3. **目前假設主要是左到右擊球**
+
    stroke detection 的 hit 判斷主要依賴球從左移轉成右移的 turning point。如果影片方向不同，需要修改判斷邏輯。
 
-4. **速度結果依賴球軌跡品質**  
+4. **速度結果依賴球軌跡品質**
+
    如果 TrackNetV3 偵測錯球、漏球、或 inpaint 補點不準，速度結果也會受到影響。
 
-5. **net zone 速度依賴 net zone 偵測穩定度**  
+5. **net zone 速度依賴 net zone 偵測穩定度**
+
    如果 table / net zone 偵測不準，`net_zone_max_speed_kmh` 可能會抓不到或抓到錯誤區段。
 
-6. **MAX_SPEED_KMH 是人工過濾上限**  
-   目前使用 `MAX_SPEED_KMH = 115.0` 過濾異常速度。這個數值是為了排除 stroke 抓取的明顯錯誤點，不代表真實球速一定不會超過此值，因為目前世界紀錄上最高球速為 116 km/h，所以訂了這個值。
+6. **MAX_SPEED_KMH 是人工過濾上限**
+
+   目前使用 `MAX_SPEED_KMH = 115.0` 過濾異常速度。這個數值是為了排除 stroke 抓取的明顯錯誤點，不代表真實球速一定不會超過此值。
