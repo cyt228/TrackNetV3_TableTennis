@@ -730,10 +730,15 @@ class Video_IterableDataset(IterableDataset):
                 end_f_id += 1
 
             # Form a sequence
+            # If no frame was read at all, stop safely instead of using frame_list[-1].
+            if len(frame_list) == 0:
+                break
+
             data_idx = [(0, i) for i in range(start_f_id, end_f_id)]
             if len(data_idx) < self.seq_len:
                 # Padding the last sequence if imcompleted
-                data_idx.extend([(0, end_f_id-1)]*(self.seq_len - len(data_idx)))
+                last_f_id = max(end_f_id - 1, start_f_id)
+                data_idx.extend([(0, last_f_id)]*(self.seq_len - len(data_idx)))
                 frame_list.extend([frame_list[-1]]*(self.seq_len - len(frame_list)))
             data_idx = np.array(data_idx)
             frames = self.__process__(np.array(frame_list)[..., ::-1])
@@ -772,6 +777,8 @@ class Video_IterableDataset(IterableDataset):
             if not success:
                 break
             frame_list.append(frame)
+        if len(frame_list) == 0:
+            raise RuntimeError(f'Cannot generate median image: no readable frames in {self.video_file}')
         median = np.median(frame_list, 0)[..., ::-1] # BGR to RGB
         if self.bg_mode == 'concat':
             median = Image.fromarray(median.astype('uint8'))
@@ -781,10 +788,16 @@ class Video_IterableDataset(IterableDataset):
         return median
     
     def __process__(self, imgs):
-        """ Process the frame sequence. """
+        """ Process the frame sequence.
+
+        Speed note:
+            Avoid repeated np.concatenate inside the loop. Building a list and
+            concatenating once is faster and keeps the same output format.
+        """
         if self.bg_mode:
             median_img = self.median
-        frames = np.array([]).reshape(0, self.HEIGHT, self.WIDTH)
+
+        frame_chunks = []
         for i in range(self.seq_len):
             img = Image.fromarray(imgs[i])
             if self.bg_mode == 'subtract':
@@ -801,9 +814,20 @@ class Video_IterableDataset(IterableDataset):
             else:
                 img = np.array(img.resize(size=(self.WIDTH, self.HEIGHT)))
                 img = np.moveaxis(img, -1, 0)
-            
-            frames = np.concatenate((frames, img), axis=0)
-        
+
+            frame_chunks.append(img)
+
+        frames = np.concatenate(frame_chunks, axis=0)
+
+        if self.bg_mode == 'concat':
+            frames = np.concatenate((median_img, frames), axis=0)
+
+        # Normalization
+        frames = frames.astype(np.float32, copy=False)
+        frames /= 255.
+        return frames
+
+
         if self.bg_mode == 'concat':
             frames = np.concatenate((median_img, frames), axis=0)
         

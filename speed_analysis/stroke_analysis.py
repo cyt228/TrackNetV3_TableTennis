@@ -71,7 +71,7 @@ def find_bounce_frame(df: pd.DataFrame, hit_idx: int, end_idx: int, frame_w: int
     if end_idx - hit_idx < 2:
         return 0
 
-    right_x_th = frame_w * 0.65
+    right_x_th = frame_w * 0.62
 
     for i in range(hit_idx + 1, end_idx):
         y_prev = float(df.iloc[i - 1]["Y"])
@@ -100,7 +100,7 @@ def find_relaxed_end_idx(
     df: pd.DataFrame,
     hit_idx: int,
     run_end_idx: int,
-    max_backward_tol: float = 12.0,
+    max_backward_tol: float = 50.0,
     max_nonforward_count: int = 3,
 ) -> int:
     """Find stroke end after hit, allowing small temporary non-forward movement."""
@@ -109,6 +109,13 @@ def find_relaxed_end_idx(
 
     for j in range(hit_idx + 1, run_end_idx):
         pdx = float(df.iloc[j + 1]["X"]) - float(df.iloc[j]["X"])
+
+        # hit 後已經往右飛一段，且前一格明顯變慢，
+        # 下一格又突然大幅往右跳，通常是接到別的點，end 停在前一格
+        if pdx > 80 and end_idx > hit_idx + 8:
+            prev_pdx = float(df.iloc[j]["X"]) - float(df.iloc[j - 1]["X"])
+            if 0 < prev_pdx <= 25:
+                return j
 
         if pdx > 0:
             end_idx = j + 1
@@ -171,9 +178,9 @@ def find_best_hit_candidate(
     """Choose the best left-to-right turning point as hit."""
     hit_x_limit = frame_w * float(left_half_ratio)
     local_window = 3
-    future_window = 8
+    future_window = 14
     min_rise_px = 80.0
-    min_net_right = 3
+    min_net_right = 2
     candidates = []
 
     for i in range(start_idx + 1, end_idx):
@@ -198,7 +205,7 @@ def find_best_hit_candidate(
         left_bound = max(start_idx, i - local_window)
         right_bound = min(end_idx, i + local_window)
         local_x = [float(df.iloc[k]["X"]) for k in range(left_bound, right_bound + 1)]
-        if x_i > min(local_x) + 8:
+        if x_i > min(local_x) + 20:
             continue
 
         check_end = min(end_idx, i + future_window)
@@ -229,7 +236,7 @@ def find_best_hit_candidate(
             dy = y_b - y_a
             step = calc_step(x_a, y_a, x_b, y_b)
 
-            if step > max_step_th * 1.2 or abs(dx) > 150 or abs(dy) > 60: # 可調整
+            if step > max_step_th * 1.5 or abs(dx) > 190 or abs(dy) > 80:
                 abnormal_jump_count += 1
                 if abnormal_jump_count > 1:
                     break
@@ -320,7 +327,7 @@ def detect_strokes_from_runs(
 
             if best is not None:
                 frame_end = int(df.iloc[best["end_idx"]]["Frame"])
-                if frame_end - frame_start + 1 > min_candidate_frames:
+                if frame_end - frame_start + 1 >= min_candidate_frames:
                     end_x = float(df.iloc[best["end_idx"]]["X"])
                     right_x_limit = frame_w * float(right_side_ratio)
 
@@ -338,7 +345,17 @@ def detect_strokes_from_runs(
                 continue
 
             frame_end = int(df.iloc[run_e]["Frame"])
-            if frame_end - frame_start + 1 > min_candidate_frames:
+
+            candidate_len = frame_end - frame_start + 1
+            start_x = float(df.iloc[frame_start_idx]["X"])
+            end_x = float(df.iloc[run_e]["X"])
+            left_dx = start_x - end_x
+            run_y_median = float(df.iloc[frame_start_idx:run_e + 1]["Y"].median())
+
+            normal_no_hit = candidate_len >= min_candidate_frames and left_dx >= 300
+            short_clear_no_hit = 20 <= candidate_len < min_candidate_frames and left_dx >= 350 and end_x <= frame_w * 0.45 and run_y_median <= 700
+
+            if normal_no_hit or short_clear_no_hit:
                 strokes.append(make_stroke(stroke_id, s, run_e, frame_start, None, frame_end, run_e, 0, 0, "no_hit"))
                 stroke_id += 1
             break

@@ -6,12 +6,19 @@ TrackNetV3 主要由兩個模型組成：
 
 [模型下載](https://1drv.ms/u/c/ab3b33d5410e04f3/IQCwzwpuGP6pSpgw0VyyRSCzAa4jTyVFYiFWUgSd8gPeCf0?e=hWQh7G)
 
-- Develop Environment
+- Development Environment
+
+租vast.ai，也可以用5090
 
 ```text
-Python 3.8
-torch 1.10.0
-GPU environment is recommended
+Platform: Vast.ai
+GPU: NVIDIA GeForce RTX 4090
+VRAM: 24 GB
+CPU: 12–24 vCPU
+RAM: 64 GB or above
+Disk: 150 GB or above
+Runtime: Linux container
+Access: Jupyter Terminal / VSCode Remote SSH
 ```
 
 - Clone this repository.
@@ -24,14 +31,28 @@ cd TrackNetV3_TableTennis
 - Create environment.
 
 ```bash
-conda create -n tracknetV3 python=3.8.7
+conda create -n tracknetV3 python=3.8
 conda activate tracknetV3
 ```
 
 - Install the requirements.
 ```bash
 pip install -r requirements.txt
+pip install torch==2.3.1 torchvision==0.18.1 torchaudio==2.3.1 --index-url https://download.pytorch.org/whl/cu121
 ```
+
+- Auto Run Scripts
+
+以下提供三種自動執行方式，可以依照資料型態選擇使用，檔案中可以修改路徑、輸出、變數等：
+
+1. `run_one.sh`：執行單一影片
+2. `run_all.sh`：執行整個資料夾內的影片
+3. `run_by_folder.sh`：依照子資料夾逐一執行，每個資料夾跑完才會換下一個
+
+> 執行前請先確認目前位於專案根目錄
+
+執行：`bash run_one.sh`、`bash run_all.sh`、`bash run_by_folder.sh`
+
 
 ---
 

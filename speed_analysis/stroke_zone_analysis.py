@@ -64,28 +64,40 @@ class FrameReader:
         self.cap.release()
 
 
-def collect_predict_videos(video_root: str) -> List[str]:
+VIDEO_EXTS = (".mp4", ".MP4")
+
+
+def collect_raw_videos(video_root: str) -> List[str]:
     video_files = []
     for root, _, files in os.walk(video_root):
         for fname in files:
-            if fname.lower().endswith(".mp4") and fname.endswith("_predict.mp4"):
-                video_files.append(os.path.join(root, fname))
+            if not fname.endswith(VIDEO_EXTS):
+                continue
+            if fname.endswith("_predict.mp4") or fname.endswith("_stroke_zone_visualize.mp4"):
+                continue
+            video_files.append(os.path.join(root, fname))
     return sorted(video_files)
 
 
-def find_ball_csv_for_video(video_path: str, csv_suffixes=("_ball.csv", "_bass.csv")):
-    video_name = os.path.basename(video_path)
-    if not video_name.endswith("_predict.mp4"):
-        return None
+def get_video_stem(video_path: str) -> str:
+    return os.path.splitext(os.path.basename(video_path))[0]
 
-    stem = video_name[:-len("_predict.mp4")]
-    video_dir = os.path.dirname(video_path)
+
+def find_ball_csv_for_raw_video(video_path: str, video_root: str, save_root: str, csv_suffixes=("_ball.csv", "_bass.csv")):
+    stem = get_video_stem(video_path)
+    rel_dir = os.path.relpath(os.path.dirname(video_path), video_root)
+    csv_dir = os.path.join(save_root, rel_dir) if rel_dir != "." else save_root
 
     for suffix in csv_suffixes:
-        csv_path = os.path.join(video_dir, f"{stem}{suffix}")
+        csv_path = os.path.join(csv_dir, f"{stem}{suffix}")
         if os.path.exists(csv_path):
             return csv_path
     return None
+
+
+def get_save_dir_for_raw_video(video_path: str, video_root: str, save_root: str) -> str:
+    rel_dir = os.path.relpath(os.path.dirname(video_path), video_root)
+    return os.path.join(save_root, rel_dir) if rel_dir != "." else save_root
 
 
 def polygon_to_result_dict(table_corners, net_zone) -> Dict:
@@ -195,7 +207,6 @@ def compute_fixed_scales(table_corners):
 
 
 def calc_segment_speed_basic_kmh(x1, y1, x2, y2, fps, sx, sy, dt_frames):
-    # Use a conservative mixed scale instead of the pure max scale.
     scale = sx + 0.25 * (sy - sx)
     dx_cm = (x2 - x1) * scale
     dy_cm = (y2 - y1) * scale
@@ -558,14 +569,15 @@ def process_single_video(
     ball_csv,
     save_dir,
     min_left_segments=5,
-    min_candidate_frames=50,
+    min_candidate_frames=40,
     max_step_th=130.0,
     max_abs_dy_th=45.0,
-    left_half_ratio=0.5,
+    left_half_ratio=0.3,
     right_side_ratio=0.6,
     zone_window=2,
     up_px=140,
     left_shift_px=160,
+    save_video=False,
 ):
     ensure_dir(save_dir)
     df = pd.read_csv(ball_csv)
@@ -614,50 +626,63 @@ def process_single_video(
         build_export_stroke_csv(summary_df_full).to_csv(csv_path, index=False, encoding="utf-8-sig")
         build_export_zone_detail_csv(summary_df_full).to_csv(zone_detail_csv_path, index=False, encoding="utf-8-sig")
         build_export_speed_compare_csv(summary_df_full).to_csv(speed_compare_csv_path, index=False, encoding="utf-8-sig")
-        draw_visual_video(video_file, df, strokes, summary_df_full, video_path)
+
+        if save_video:
+            draw_visual_video(video_file, df, strokes, summary_df_full, video_path)
     finally:
         frame_reader.release()
 
     print(f"saved csv   : {csv_path}")
     print(f"saved zone  : {zone_detail_csv_path}")
     print(f"saved speed : {speed_compare_csv_path}")
-    print(f"saved video : {video_path}")
+    if save_video:
+        print(f"saved video : {video_path}")
+    else:
+        print("saved video : skipped")
     print(f"num strokes : {len(summary_df_full)}")
 
 
 def process_video_root(
     video_root,
+    save_root,
     csv_suffixes=("_ball.csv", "_bass.csv"),
     min_left_segments=5,
-    min_candidate_frames=50,
+    min_candidate_frames=40,
     max_step_th=130.0,
     max_abs_dy_th=45.0,
-    left_half_ratio=0.5,
+    left_half_ratio=0.3,
     right_side_ratio=0.5,
     zone_window=2,
     up_px=140,
     left_shift_px=160,
+    save_video=False,
 ):
-    video_files = collect_predict_videos(video_root)
+    video_files = collect_raw_videos(video_root)
     if not video_files:
-        raise RuntimeError(f"No *_predict.mp4 files found under: {video_root}")
+        raise RuntimeError(f"No raw mp4 files found under: {video_root}")
 
-    print(f"[INFO] found {len(video_files)} videos under {video_root}")
+    print(f"[INFO] found {len(video_files)} raw videos under {video_root}")
 
     for i, video_file in enumerate(video_files, 1):
-        ball_csv = find_ball_csv_for_video(video_file, csv_suffixes=csv_suffixes)
-        if ball_csv is None:
-            print("=" * 80)
-            print(f"[BATCH] ({i}/{len(video_files)})")
-            print(f"[SKIP] no matching csv for: {video_file}")
-            continue
+        ball_csv = find_ball_csv_for_raw_video(
+            video_path=video_file,
+            video_root=video_root,
+            save_root=save_root,
+            csv_suffixes=csv_suffixes,
+        )
+        save_dir = get_save_dir_for_raw_video(video_file, video_root, save_root)
 
-        save_dir = os.path.dirname(video_file)
         print("=" * 80)
         print(f"[BATCH] ({i}/{len(video_files)})")
         print(f"[BATCH] video    : {video_file}")
-        print(f"[BATCH] ball csv : {ball_csv}")
         print(f"[BATCH] save dir : {save_dir}")
+        print(f"[BATCH] save video: {save_video}")
+
+        if ball_csv is None:
+            print(f"[SKIP] no matching ball csv for: {video_file}")
+            continue
+
+        print(f"[BATCH] ball csv : {ball_csv}")
 
         try:
             process_single_video(
@@ -673,6 +698,7 @@ def process_video_root(
                 zone_window=zone_window,
                 up_px=up_px,
                 left_shift_px=left_shift_px,
+                save_video=save_video,
             )
         except Exception as e:
             print(f"[ERROR] failed on {video_file}")
@@ -685,16 +711,18 @@ def parse_args():
     parser.add_argument("--ball_csv", type=str, default=None)
     parser.add_argument("--save_dir", type=str, default=None)
     parser.add_argument("--video_root", type=str, default=None)
+    parser.add_argument("--save_root", type=str, default=None)
     parser.add_argument("--csv_suffixes", type=str, nargs="+", default=["_ball.csv", "_bass.csv"])
     parser.add_argument("--min_left_segments", type=int, default=5)
-    parser.add_argument("--min_candidate_frames", type=int, default=50)
+    parser.add_argument("--min_candidate_frames", type=int, default=40)
     parser.add_argument("--max_step_th", type=float, default=130.0)
     parser.add_argument("--max_abs_dy_th", type=float, default=45.0)
-    parser.add_argument("--left_half_ratio", type=float, default=0.5)
+    parser.add_argument("--left_half_ratio", type=float, default=0.3)
     parser.add_argument("--right_side_ratio", type=float, default=0.5)
     parser.add_argument("--zone_window", type=int, default=2)
     parser.add_argument("--up_px", type=int, default=140)
     parser.add_argument("--left_shift_px", type=int, default=160)
+    parser.add_argument("--save_video", action="store_true", help="Save stroke visualization video. Default is False.")
     return parser.parse_args()
 
 
@@ -702,8 +730,12 @@ def main():
     args = parse_args()
 
     if args.video_root is not None:
+        if args.save_root is None:
+            raise ValueError("root mode requires --video_root and --save_root")
+
         process_video_root(
             video_root=args.video_root,
+            save_root=args.save_root,
             csv_suffixes=tuple(args.csv_suffixes),
             min_left_segments=args.min_left_segments,
             min_candidate_frames=args.min_candidate_frames,
@@ -714,6 +746,7 @@ def main():
             zone_window=args.zone_window,
             up_px=args.up_px,
             left_shift_px=args.left_shift_px,
+            save_video=args.save_video,
         )
         return
 
@@ -734,6 +767,7 @@ def main():
             zone_window=args.zone_window,
             up_px=args.up_px,
             left_shift_px=args.left_shift_px,
+            save_video=args.save_video,
         )
         return
 

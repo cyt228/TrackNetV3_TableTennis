@@ -134,6 +134,21 @@ def should_reset_track(
                 )
             return True, "stale_ball"
 
+    # Reset vertical false tracks:
+    # x almost stays in the same place, but y keeps moving a lot.
+    if len(valid_history) >= stale_frames:
+        recent = valid_history[-stale_frames:]
+        xs = [p[0] for p in recent]
+        ys = [p[1] for p in recent]
+
+        x_span = max(xs) - min(xs)
+        y_span = max(ys) - min(ys)
+
+        if x_span <= 35.0 and y_span >= 45.0:
+            if debug:
+                print(f"[reset] vertical false track -> reset (x_span={x_span:.2f}, y_span={y_span:.2f})")
+            return True, "vertical_false_track"
+
     return False, None
 
 def predict_location_candidates(heatmap, max_candidates=3, min_area=1):
@@ -210,10 +225,16 @@ def select_best_candidate(
 
     if miss_count == 0:
         max_x_gap = 130.0
-    elif miss_count <= 3:
-        max_x_gap = 350.0
+        max_y_gap = 100.0
+    elif miss_count <= 2:
+        max_x_gap = 220.0
+        max_y_gap = 140.0
+    elif miss_count <= 4:
+        max_x_gap = 300.0
+        max_y_gap = 180.0
     else:
-        max_x_gap = 550.0
+        max_x_gap = 600.0
+        max_y_gap = 220.0
 
     valid_candidates = []
     for c in candidates:
@@ -232,12 +253,12 @@ def select_best_candidate(
         x_to_pred = abs(cx - pred_x)
         y_to_pred = abs(cy - pred_y)
 
-        if y_to_last > 100:
+        if y_to_last > max_y_gap:
             continue
 
         if x_to_last > max_x_gap:
-            continue
-
+            continue   
+        
         if len(valid_history) >= 2 and miss_count == 0:
             if hist_dx > 12 and dx < -12:
                 continue

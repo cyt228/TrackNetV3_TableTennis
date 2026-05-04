@@ -48,18 +48,20 @@
 ### 單一影片分析
 
 ```bash
-python speed_analysis/stroke_zone_analysis.py --video_file path/to/xxx_predict.mp4 --ball_csv path/to/xxx_ball.csv --save_dir path/to/output_dir
+python speed_analysis/stroke_zone_analysis.py --video_file path/to/xxx_predict.mp4 --ball_csv path/to/xxx_ball.csv --save_dir path/to/output_dir --save_video
 ```
 
 ### 整個資料夾批次分析
 
 ```bash
-python speed_analysis/stroke_zone_analysis.py --video_root path/to/pred_result_folder
+python speed_analysis/stroke_zone_analysis.py --video_root path/to/pred_result_folder --save_video
 ```
 
 批次模式會自動尋找資料夾底下的：`*_predict.mp4`
 
 並尋找同資料夾中對應的：`*_ball.csv`，如果找不到對應 CSV，該影片會被跳過。
+
+不要存影片的話就不要寫 `--save_video`
 
 ---
 
