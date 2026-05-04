@@ -43,7 +43,7 @@ pip install torch==2.3.1 torchvision==0.18.1 torchaudio==2.3.1 --index-url https
 
 - Auto Run Scripts
 
-以下提供三種自動執行方式，可以依照資料型態選擇使用：
+以下提供三種自動執行方式，可以依照資料型態選擇使用，檔案中可以修改路徑、輸出、變數等：
 
 1. `run_one.sh`：執行單一影片
 2. `run_all.sh`：執行整個資料夾內的影片
@@ -51,8 +51,7 @@ pip install torch==2.3.1 torchvision==0.18.1 torchaudio==2.3.1 --index-url https
 
 > 執行前請先確認目前位於專案根目錄
 
-執行：`bash run_one.sh`、`bash run_all.sh`、`bash run_by)folder.sh`
-從各自的檔案中可以修改路徑、輸出、變數等
+執行：`bash run_one.sh`、`bash run_all.sh`、`bash run_by_folder.sh`
 
 ---
 
