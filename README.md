@@ -8,8 +8,6 @@ TrackNetV3 主要由兩個模型組成：
 
 - Development Environment
 
-租vast.ai，也可以用5090
-
 ```text
 Platform: Vast.ai
 GPU: NVIDIA GeForce RTX 4090
