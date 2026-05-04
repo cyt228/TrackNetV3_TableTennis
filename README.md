@@ -19,6 +19,7 @@ RAM: 64 GB or above
 Disk: 150 GB or above
 Runtime: Linux container
 Access: Jupyter Terminal / VSCode Remote SSH
+```
 
 - Clone this repository.
 
