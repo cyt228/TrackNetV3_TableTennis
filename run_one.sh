@@ -11,7 +11,6 @@ NAME=$(basename "$VIDEO_FILE")
 NAME="${NAME%.*}"
 
 #CUDA_VISIBLE_DEVICES=2 python predict.py --video_file "$VIDEO_FILE" --tracknet_file exp/TrackNet_best.pt --inpaintnet_file exp/InpaintNet_best.pt --save_dir "$SAVE_DIR" --large_video
->>>>>>> eafb225 (Inference Pipeline 效能優化)
 python speed_analysis/stroke_zone_analysis.py --video_file "$VIDEO_FILE" --ball_csv "$SAVE_DIR/${NAME}_ball.csv" --save_dir "$SAVE_DIR"
 python speed_analysis/plot_speed.py --input "$SAVE_DIR"
 
