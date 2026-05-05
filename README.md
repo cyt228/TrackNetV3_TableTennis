@@ -25,7 +25,7 @@ Access: Jupyter Terminal / VSCode Remote SSH
 - Clone this repository.
 
 ```bash
-git clone https://github.com/cyt228/TrackNetV3_TableTennis.git
+git clone https://github.com/wasn-lab/TrackNetV3_TableTennis.git
 cd TrackNetV3_TableTennis
 ```
 
@@ -39,7 +39,7 @@ conda activate tracknetV3
 - Install the requirements.
 ```bash
 pip install -r requirements.txt
-pip install torch==2.3.1 torchvision==0.18.1 torchaudio==2.3.1 --index-url https://download.pytorch.org/whl/cu121
+pip install --pre torch torchvision torchaudio --index-url https://download.pytorch.org/whl/nightly/cu128
 ```
 
 - Auto Run Scripts
