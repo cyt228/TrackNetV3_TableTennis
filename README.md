@@ -25,7 +25,7 @@ Access: Jupyter Terminal / VSCode Remote SSH
 - Clone this repository.
 
 ```bash
-git clone https://github.com/wasn-lab/TrackNetV3_TableTennis.git
+git clone https://github.com/cyt228/TrackNetV3_TableTennis.git
 cd TrackNetV3_TableTennis
 ```
 
