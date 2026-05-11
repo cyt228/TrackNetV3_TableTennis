@@ -173,7 +173,7 @@ def select_best_candidate(
     miss_count=0,
     min_area_no_history=6.0,
     min_area_with_history=2.0,
-    min_y=350,
+    min_y=150,
     max_y=900,
     debug=False,
 ):

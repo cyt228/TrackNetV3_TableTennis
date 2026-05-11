@@ -1,12 +1,11 @@
-import argparse
+"""Stroke detection helper functions for stroke_zone_analysis.py."""
+
 import math
-import os
 from typing import Dict, List, Optional
 
 import cv2
 import numpy as np
 import pandas as pd
-
 
 # Basic helpers
 
@@ -27,6 +26,7 @@ def safe_int(value):
 
 def ensure_dir(path: str):
     if path:
+        import os
         os.makedirs(path, exist_ok=True)
 
 
@@ -66,66 +66,6 @@ def collect_valid_runs(df: pd.DataFrame) -> List[Dict]:
     return runs
 
 
-def find_bounce_frame(df: pd.DataFrame, hit_idx: int, end_idx: int, frame_w: int) -> int:
-    """Find the first right-side local y peak after hit."""
-    if end_idx - hit_idx < 2:
-        return 0
-
-    right_x_th = frame_w * 0.65
-
-    for i in range(hit_idx + 1, end_idx):
-        y_prev = float(df.iloc[i - 1]["Y"])
-        y_cur = float(df.iloc[i]["Y"])
-        y_next = float(df.iloc[i + 1]["Y"])
-        x_cur = float(df.iloc[i]["X"])
-
-        dy1 = y_cur - y_prev
-        dy2 = y_next - y_cur
-        is_peak = False
-
-        if dy1 > 0 and dy2 < 0:
-            is_peak = True
-        elif dy1 > 0 and dy2 == 0 and i + 2 <= end_idx:
-            is_peak = float(df.iloc[i + 2]["Y"]) < y_next
-        elif dy1 == 0 and dy2 < 0 and i - 2 >= hit_idx:
-            is_peak = y_prev > float(df.iloc[i - 2]["Y"])
-
-        if is_peak and x_cur >= right_x_th:
-            return int(df.iloc[i]["Frame"])
-
-    return 0
-
-
-def find_relaxed_end_idx(
-    df: pd.DataFrame,
-    hit_idx: int,
-    run_end_idx: int,
-    max_backward_tol: float = 12.0,
-    max_nonforward_count: int = 3,
-) -> int:
-    """Find stroke end after hit, allowing small temporary non-forward movement."""
-    end_idx = hit_idx + 1
-    nonforward_count = 0
-
-    for j in range(hit_idx + 1, run_end_idx):
-        pdx = float(df.iloc[j + 1]["X"]) - float(df.iloc[j]["X"])
-
-        if pdx > 0:
-            end_idx = j + 1
-            nonforward_count = 0
-            continue
-
-        if pdx >= -max_backward_tol:
-            nonforward_count += 1
-            if nonforward_count <= max_nonforward_count:
-                end_idx = j + 1
-                continue
-
-        break
-
-    return end_idx
-
-
 def find_left_start_idx(
     df: pd.DataFrame,
     start_idx: int,
@@ -160,114 +100,11 @@ def find_left_start_idx(
     return None
 
 
-def find_best_hit_candidate(
-    df: pd.DataFrame,
-    start_idx: int,
-    end_idx: int,
-    frame_w: int,
-    max_step_th: float,
-    left_half_ratio: float,
-) -> Optional[Dict]:
-    """Choose the best left-to-right turning point as hit."""
-    hit_x_limit = frame_w * float(left_half_ratio)
-    local_window = 3
-    future_window = 8
-    min_rise_px = 80.0
-    min_net_right = 3
-    candidates = []
-
-    for i in range(start_idx + 1, end_idx):
-        x_im1 = float(df.iloc[i - 1]["X"])
-        x_i = float(df.iloc[i]["X"])
-        x_ip1 = float(df.iloc[i + 1]["X"])
-
-        prev_dx = x_i - x_im1
-        curr_dx = x_ip1 - x_i
-        is_turn = prev_dx < 0 and curr_dx > 0
-
-        if not is_turn and prev_dx == 0 and curr_dx > 0 and i - 2 >= start_idx:
-            x_im2 = float(df.iloc[i - 2]["X"])
-            is_turn = x_im1 - x_im2 < 0
-
-        if not is_turn:
-            continue
-
-        if not (x_i <= hit_x_limit and x_ip1 <= hit_x_limit):
-            continue
-
-        left_bound = max(start_idx, i - local_window)
-        right_bound = min(end_idx, i + local_window)
-        local_x = [float(df.iloc[k]["X"]) for k in range(left_bound, right_bound + 1)]
-        if x_i > min(local_x) + 8:
-            continue
-
-        check_end = min(end_idx, i + future_window)
-        max_future_x = x_i
-        right_count = 0
-        left_count = 0
-
-        for j in range(i, check_end):
-            pdx = float(df.iloc[j + 1]["X"]) - float(df.iloc[j]["X"])
-            if pdx > 0:
-                right_count += 1
-            elif pdx < 0:
-                left_count += 1
-            max_future_x = max(max_future_x, float(df.iloc[j + 1]["X"]))
-
-        rise_px = max_future_x - x_i
-        net_right = right_count - left_count
-        if rise_px < min_rise_px or net_right < min_net_right:
-            continue
-
-        abnormal_jump_count = 0
-        for j in range(i, min(end_idx, i + 6)):
-            x_a = float(df.iloc[j]["X"])
-            y_a = float(df.iloc[j]["Y"])
-            x_b = float(df.iloc[j + 1]["X"])
-            y_b = float(df.iloc[j + 1]["Y"])
-            dx = x_b - x_a
-            dy = y_b - y_a
-            step = calc_step(x_a, y_a, x_b, y_b)
-
-            if step > max_step_th * 1.2 or abs(dx) > 150 or abs(dy) > 60: # 可調整
-                abnormal_jump_count += 1
-                if abnormal_jump_count > 1:
-                    break
-
-        if abnormal_jump_count > 1:
-            continue
-
-        stroke_end_idx = find_relaxed_end_idx(df, hit_idx=i, run_end_idx=end_idx)
-        forward_count = 0
-        for j in range(i, stroke_end_idx):
-            if float(df.iloc[j + 1]["X"]) - float(df.iloc[j]["X"]) > 0:
-                forward_count += 1
-
-        candidates.append({
-            "hit_idx": i,
-            "end_idx": stroke_end_idx,
-            "forward_count": forward_count,
-            "post_hit_frames": int(df.iloc[stroke_end_idx]["Frame"]) - int(df.iloc[i]["Frame"]) + 1,
-            "rise_px": rise_px,
-            "net_right": net_right,
-            "end_x": float(df.iloc[stroke_end_idx]["X"]),
-        })
-
-    if not candidates:
-        return None
-
-    return max(
-        candidates,
-        key=lambda c: (c["end_x"], c["post_hit_frames"], c["forward_count"], c["rise_px"], -c["hit_idx"]),
-    )
-
-
 def make_stroke(
     stroke_id: int,
     run_start_idx: int,
     run_end_idx: int,
     frame_start: int,
-    hit_frame,
     frame_end: int,
     stroke_end_idx: int,
     bounce_frame: int,
@@ -279,7 +116,6 @@ def make_stroke(
         "run_start_idx": run_start_idx,
         "run_end_idx": run_end_idx,
         "frame_start": frame_start,
-        "hit_frame": hit_frame,
         "frame_end": frame_end,
         "stroke_end_idx": stroke_end_idx,
         "bounce_frame": bounce_frame,
@@ -288,60 +124,233 @@ def make_stroke(
     }
 
 
+def find_jump_end_idx(
+    df: pd.DataFrame,
+    start_idx: int,
+    end_idx: int,
+    max_step_th: float,
+) -> int:
+    """
+    Find an early stroke end when the tracked ball jumps too far.
+
+    The input run is already consecutive and visible. This function only checks
+    spatial continuity. If the distance between two adjacent points is larger
+    than max_step_th, the stroke ends at the previous frame.
+    """
+    if end_idx <= start_idx:
+        return start_idx
+
+    for i in range(start_idx, end_idx):
+        x1 = float(df.iloc[i]["X"])
+        y1 = float(df.iloc[i]["Y"])
+        x2 = float(df.iloc[i + 1]["X"])
+        y2 = float(df.iloc[i + 1]["Y"])
+        step = calc_step(x1, y1, x2, y2)
+
+        if step > max_step_th:
+            return i
+
+    return end_idx
+
+
+def has_rightward_motion(
+    df: pd.DataFrame,
+    start_idx: int,
+    end_idx: int,
+    min_right_frames: int = 2,
+    min_right_dx: float = 35.0,
+    max_step_th: float = 300.0,
+    right_side_x: Optional[float] = None,
+) -> bool:
+    """Return True only when the ball really turns and reaches the right side."""
+    if end_idx <= start_idx:
+        return False
+
+    min_x = float(df.iloc[start_idx]["X"])
+    min_idx = start_idx
+    right_frames = 0
+    has_basic_turn = False
+    max_x_after_min = min_x
+
+    for i in range(start_idx + 1, end_idx + 1):
+        prev = df.iloc[i - 1]
+        cur = df.iloc[i]
+
+        x1 = float(prev["X"])
+        y1 = float(prev["Y"])
+        x2 = float(cur["X"])
+        y2 = float(cur["Y"])
+
+        if calc_step(x1, y1, x2, y2) > max_step_th:
+            break
+
+        if x2 < min_x:
+            min_x = x2
+            min_idx = i
+            right_frames = 0
+            has_basic_turn = False
+            max_x_after_min = x2
+            continue
+
+        if i > min_idx:
+            max_x_after_min = max(max_x_after_min, x2)
+
+        dx_from_min = x2 - min_x
+
+        if i > min_idx and dx_from_min >= min_right_dx:
+            right_frames += 1
+            if right_frames >= min_right_frames:
+                has_basic_turn = True
+        else:
+            if dx_from_min < min_right_dx * 0.5:
+                right_frames = 0
+
+    if not has_basic_turn:
+        return False
+
+    if right_side_x is not None and max_x_after_min < right_side_x:
+        return False
+
+    return True
+
 def detect_strokes_from_runs(
     df: pd.DataFrame,
     frame_w: int,
     min_left_segments: int = 5,
     min_candidate_frames: int = 35,
+    min_no_hit_candidate_frames: int = 20,
     max_step_th: float = 130.0,
     max_abs_dy_th: float = 45.0,
-    left_half_ratio: float = 0.5,
+    left_half_ratio: float = 0.35,
     right_side_ratio: float = 0.5,
 ) -> List[Dict]:
-    """Detect strokes using left-moving start and left-to-right hit turning point."""
+    """
+    Simplified stroke detection for net-zone speed + landing analysis.
+
+    Rule:
+    - collect each continuous visible run
+    - find a stable left-moving segment as the stroke start
+    - normally end at the end of the continuous visible run
+    - if a neighboring point jumps farther than max_step_th, end early
+    - short left-side misses can be exported as no_hit
+    - bounce_frame is not detected here; landing analysis fills it later
+    """
     strokes = []
     stroke_id = 1
 
     for run in collect_valid_runs(df):
         run_s = run["start_idx"]
         run_e = run["end_idx"]
-        s = run_s
+        search_idx = run_s
 
-        while s < run_e:
-            if run_e - s < 1:
-                break
-
-            frame_start_idx = find_left_start_idx(df, s, run_e, min_left_segments, max_step_th, max_abs_dy_th)
+        while search_idx < run_e:
+            frame_start_idx = find_left_start_idx(
+                df=df,
+                start_idx=search_idx,
+                end_idx=run_e,
+                min_left_segments=min_left_segments,
+                max_step_th=max_step_th,
+                max_abs_dy_th=max_abs_dy_th,
+            )
             if frame_start_idx is None:
                 break
 
+            stroke_end_idx = find_jump_end_idx(
+                df=df,
+                start_idx=frame_start_idx,
+                end_idx=run_e,
+                max_step_th=max_step_th,
+            )
+
             frame_start = int(df.iloc[frame_start_idx]["Frame"])
-            best = find_best_hit_candidate(df, s, run_e, frame_w, max_step_th, left_half_ratio)
+            frame_end = int(df.iloc[stroke_end_idx]["Frame"])
+            stroke_len = frame_end - frame_start + 1
 
-            if best is not None:
-                frame_end = int(df.iloc[best["end_idx"]]["Frame"])
-                if frame_end - frame_start + 1 > min_candidate_frames:
-                    end_x = float(df.iloc[best["end_idx"]]["X"])
-                    right_x_limit = frame_w * float(right_side_ratio)
+            if stroke_len >= min_no_hit_candidate_frames:
+                has_hit = False
 
-                    if end_x >= right_x_limit:
-                        bounce_frame = find_bounce_frame(df, best["hit_idx"], best["end_idx"], frame_w)
-                        strokes.append(make_stroke(
-                            stroke_id, s, run_e, frame_start, int(df.iloc[best["hit_idx"]]["Frame"]),
-                            frame_end, best["end_idx"], bounce_frame, 1, ""
-                        ))
-                    else:
-                        strokes.append(make_stroke(stroke_id, s, run_e, frame_start, None, frame_end, best["end_idx"], 0, 0, "no_hit"))
-                    stroke_id += 1
+                # Only long enough strokes can become valid hits. Short left-side
+                # strokes are kept only as no_hit candidates.
+                if stroke_len >= min_candidate_frames:
+                    has_hit = has_rightward_motion(
+                        df=df,
+                        start_idx=frame_start_idx,
+                        end_idx=stroke_end_idx,
+                        min_right_frames=2,
+                        min_right_dx=35.0,
+                        max_step_th=max_step_th,
+                        right_side_x=frame_w * right_side_ratio,
+                    )
 
-                s = best["end_idx"] + 1
-                continue
+                    # If it currently looks like no_hit, look ahead a little.
+                    # This recovers cases where the stroke was cut before the
+                    # right-moving part became clear, while still requiring
+                    # consecutive right movement and reaching the right side.
+                    if not has_hit:
+                        min_x = float(df.iloc[frame_start_idx]["X"])
+                        for k in range(frame_start_idx, stroke_end_idx + 1):
+                            min_x = min(min_x, float(df.iloc[k]["X"]))
 
-            frame_end = int(df.iloc[run_e]["Frame"])
-            if frame_end - frame_start + 1 > min_candidate_frames:
-                strokes.append(make_stroke(stroke_id, s, run_e, frame_start, None, frame_end, run_e, 0, 0, "no_hit"))
+                        lookahead_end_idx = min(run_e, stroke_end_idx + min_candidate_frames)
+
+                        recover_right_count = 0
+                        recovered_idx = None
+                        prev_x = float(df.iloc[stroke_end_idx]["X"])
+
+                        for k in range(stroke_end_idx + 1, lookahead_end_idx + 1):
+                            x = float(df.iloc[k]["X"])
+                            y = float(df.iloc[k]["Y"])
+                            px = float(df.iloc[k - 1]["X"])
+                            py = float(df.iloc[k - 1]["Y"])
+
+                            if calc_step(px, py, x, y) > max_step_th:
+                                break
+
+                            if x > prev_x:
+                                recover_right_count += 1
+                            else:
+                                recover_right_count = 0
+
+                            prev_x = x
+
+                            if (
+                                recover_right_count >= 3
+                                and x - min_x >= 80.0
+                                and x >= frame_w * right_side_ratio
+                            ):
+                                recovered_idx = k
+                                break
+
+                        if recovered_idx is not None:
+                            has_hit = True
+                            stroke_end_idx = lookahead_end_idx
+                            frame_end = int(df.iloc[stroke_end_idx]["Frame"])
+                            stroke_len = frame_end - frame_start + 1
+
+                end_x = float(df.iloc[stroke_end_idx]["X"])
+
+                # Short no_hit rows are only kept when they really end on the
+                # left side. This avoids exporting short right-side noise.
+                if stroke_len < min_candidate_frames and end_x > frame_w * left_half_ratio:
+                    search_idx = stroke_end_idx + 1
+                    continue
+
+
+                strokes.append(make_stroke(
+                    stroke_id=stroke_id,
+                    run_start_idx=frame_start_idx,
+                    run_end_idx=stroke_end_idx,
+                    frame_start=frame_start,
+                    frame_end=frame_end,
+                    stroke_end_idx=stroke_end_idx,
+                    bounce_frame=0,
+                    valid=1 if has_hit else 0,
+                    note="" if has_hit else "no_hit",
+                ))
                 stroke_id += 1
-            break
+
+            # Continue after the early end. If there was no jump, this exits the run.
+            search_idx = stroke_end_idx + 1
 
     return strokes
 
@@ -378,33 +387,3 @@ def draw_polygon(frame, pts, color, thickness=2, fill=False, alpha=0.18):
         cv2.fillPoly(overlay, [pts_np], color)
         cv2.addWeighted(overlay, alpha, frame, 1 - alpha, 0, frame)
     cv2.polylines(frame, [pts_np], True, color, thickness, cv2.LINE_AA)
-
-
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--ball_csv", type=str, required=True)
-    parser.add_argument("--frame_w", type=int, required=True)
-    parser.add_argument("--min_left_segments", type=int, default=5)
-    parser.add_argument("--min_candidate_frames", type=int, default=35)
-    parser.add_argument("--max_step_th", type=float, default=130.0)
-    parser.add_argument("--max_abs_dy_th", type=float, default=45.0)
-    parser.add_argument("--left_half_ratio", type=float, default=0.5)
-    parser.add_argument("--right_side_ratio", type=float, default=0.5)
-    args = parser.parse_args()
-
-    df = pd.read_csv(args.ball_csv)
-    strokes = detect_strokes_from_runs(
-        df=df,
-        frame_w=args.frame_w,
-        min_left_segments=args.min_left_segments,
-        min_candidate_frames=args.min_candidate_frames,
-        max_step_th=args.max_step_th,
-        max_abs_dy_th=args.max_abs_dy_th,
-        left_half_ratio=args.left_half_ratio,
-        right_side_ratio=args.right_side_ratio,
-    )
-    print(pd.DataFrame(strokes).to_string(index=False))
-
-
-if __name__ == "__main__":
-    main()

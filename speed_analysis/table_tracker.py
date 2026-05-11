@@ -77,9 +77,9 @@ def extend_line_to_top_bottom(line, top_line, bottom_line, frame):
 def detect_table(frame, debug=False):
     h, w = frame.shape[:2]
 
-    roi_y1 = int(h * 0.45)
+    roi_y1 = int(h * 0.3)
     roi_y2 = int(h * 0.88)
-    roi_x1 = int(w * 0.22)
+    roi_x1 = int(w * 0.18)
     roi_x2 = int(w * 0.96)
     roi = frame[roi_y1:roi_y2, roi_x1:roi_x2].copy()
 
@@ -118,16 +118,17 @@ def detect_table(frame, debug=False):
         gcy = (gy1 + gy2) / 2.0
 
         if angle_abs < 20 or angle_abs > 160:
-            if 420 <= gcy <= 880 and length >= 280:
+            if 200 <= gcy <= 880 and length >= 120:
                 horiz_lines.append((gx1, gy1, gx2, gy2))
             continue
 
-        if 30 < angle_abs < 85 or 95 < angle_abs < 150:
-            if not (420 <= gcy <= 930 and length >= 220):
+        if 40 < angle_abs < 82 or 98 < angle_abs < 140:
+            if not (420 <= gcy <= 930 and length >= 200):
                 continue
+
             if 980 <= gcx <= 1280:
                 net_lines.append((gx1, gy1, gx2, gy2))
-            elif gcx < 900 or gcx > 1360:
+            elif gcx < 900 or (1360 < gcx < w * 0.92):
                 edge_lines.append((gx1, gy1, gx2, gy2))
 
     if debug:

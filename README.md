@@ -44,6 +44,7 @@ pip install --pre torch torchvision torchaudio --index-url https://download.pyto
 
 - Auto Run Scripts
 
+> 現在只有 run_one 有寫新版的 table 抓取，所以盡量以 run_one 來用
 以下提供三種自動執行方式，可以依照資料型態選擇使用，檔案中可以修改路徑、輸出、變數等：
 
 1. `run_one.sh`：執行單一影片
@@ -516,7 +517,7 @@ def select_best_candidate(
     miss_count=0,
     min_area_no_history=6.0,
     min_area_with_history=2.0,
-    min_y=350,
+    min_y=150,
     max_y=900,
     debug=False,
 ):
@@ -532,7 +533,7 @@ def select_best_candidate(
 | `miss_count` | `0` | 目前已經連續 miss 幾個 frame |
 | `min_area_no_history` | `6.0` | 沒有歷史軌跡時，候選點最小面積限制 |
 | `min_area_with_history` | `2.0` | 有歷史軌跡時，候選點最小面積限制 |
-| `min_y` | `350` | 候選點 y 座標下限 |
+| `min_y` | `150` | 候選點 y 座標下限 |
 | `max_y` | `900` | 候選點 y 座標上限 |
 | `debug` | `False` | 是否輸出 debug 訊息 |
 
@@ -579,7 +580,7 @@ candidates = [c for c in candidates if min_y <= c["cy"] <= max_y]
 目前設定：
 
 ```python
-min_y = 350
+min_y = 150
 max_y = 900
 ```
 

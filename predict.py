@@ -296,7 +296,7 @@ def main():
     parser.add_argument('--batch_size',     type=int, default=16)
     parser.add_argument('--eval_mode',      type=str, default='weight',
                         choices=['nonoverlap', 'average', 'weight'])
-    parser.add_argument('--max_sample_num', type=int, default=100)
+    parser.add_argument('--max_sample_num', type=int, default=150)
     parser.add_argument('--video_range',
                         type=lambda s: [int(x) for x in s.split(',')], default=(10,20))
     parser.add_argument('--save_dir',       type=str, default='pred_result')
