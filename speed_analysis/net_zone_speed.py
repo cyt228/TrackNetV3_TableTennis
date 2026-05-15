@@ -2,13 +2,8 @@
 
 This file is meant for GT/ball CSV speed alignment checks. It reads a ball/GT CSV and helper_table JSON, keeps only rightward ball segments inside the near-net box, and exports max speed using 1f / 2f / c2f logic.
 
-<<<<<<< HEAD
 Example: python net_zone_speed_base_alpha.py --video_file C0086.MP4 --ball_csv C0086_gt.csv --helper_table_json C0086_helper_table.json --save_dir output --base_alpha 0.15 --save_debug_video
 CSV-only mode: python net_zone_speed_base_alpha.py --ball_csv C0086_gt.csv --helper_table_json C0086_helper_table.json --save_dir output -base_alpha 0.15
-=======
-Example: python net_zone_speed_base_alpha.py --video_file C0086.MP4 --ball_csv C0086_gt.csv --helper_table_json C0086_helper_table.json --save_dir output --base_alpha 0.25 --save_debug_video
-CSV-only mode: python net_zone_speed_base_alpha.py --ball_csv C0086_gt.csv --helper_table_json C0086_helper_table.json --save_dir output --fps 119.88 --frame_w 1920 --frame_h 1080 --base_alpha 0.25
->>>>>>> origin/master
 """
 
 import argparse
@@ -123,11 +118,8 @@ def compute_table_geometry_metrics(table_corners: np.ndarray, frame_w: int, fram
     left_sy = TABLE_H / left_px
     right_sy = TABLE_H / right_px
 
-<<<<<<< HEAD
     #sx = float((top_sx + bottom_sx)/2)
     #sy = float((left_sy + right_sy)/2)
-=======
->>>>>>> origin/master
     sx = float(max(top_sx, bottom_sx))
     sy = float(max(left_sy, right_sy))
     scale = float(sx + float(base_alpha) * (sy - sx))
@@ -161,11 +153,9 @@ def calc_segment_speed_basic_kmh(x1, y1, x2, y2, fps, sx, sy, dt_frames, base_al
     scale = sx + float(base_alpha) * (sy - sx)
     dx_cm = (float(x2) - float(x1)) * scale
     dy_cm = (float(y2) - float(y1)) * scale
-<<<<<<< HEAD
     #dx_cm = (float(x2) - float(x1)) * sx
     #dy_cm = (float(y2) - float(y1)) * sy
-=======
->>>>>>> origin/master
+
     v_cm_s = math.hypot(dx_cm, dy_cm) / (float(dt_frames) / float(fps))
     return float(v_cm_s * 0.036)
 
@@ -200,11 +190,8 @@ def make_speed_segment(df: pd.DataFrame, i: int, j: int, fps: float, sx: float, 
     return float(speed), f1, f2
 
 
-<<<<<<< HEAD
 def compute_net_zone_speeds(df: pd.DataFrame, fps: float, table_corners: np.ndarray, net_zone_points: np.ndarray, frame_w: int, frame_h: int, base_alpha: float = 0.15, expand_net_neighbor: bool = True) -> Tuple[pd.DataFrame, Dict]:
-=======
-def compute_net_zone_speeds(df: pd.DataFrame, fps: float, table_corners: np.ndarray, net_zone_points: np.ndarray, frame_w: int, frame_h: int, base_alpha: float = 0.25, expand_net_neighbor: bool = True) -> Tuple[pd.DataFrame, Dict]:
->>>>>>> origin/master
+
     metrics = compute_table_geometry_metrics(table_corners, frame_w, frame_h, base_alpha=base_alpha)
     sx = float(metrics["sx_cm_per_px"])
     sy = float(metrics["sy_cm_per_px"])
@@ -222,15 +209,12 @@ def compute_net_zone_speeds(df: pd.DataFrame, fps: float, table_corners: np.ndar
                 speed_candidates.append((speed_type, *seg))
 
         speed_map = {speed_type: speed for speed_type, speed, _, _ in speed_candidates}
-<<<<<<< HEAD
+
         # find max in 3 ways
-=======
->>>>>>> origin/master
         if speed_candidates:
             best_type, best_speed, best_start, best_end = max(speed_candidates, key=lambda item: item[1])
         else:
             best_type, best_speed, best_start, best_end = "", np.nan, "", ""
-<<<<<<< HEAD
         '''
         # avg of 3 ways
         if speed_candidates:
@@ -246,9 +230,7 @@ def compute_net_zone_speeds(df: pd.DataFrame, fps: float, table_corners: np.ndar
         else:
             best_type, best_speed, best_start, best_end = "", np.nan, "", ""
         '''
-=======
 
->>>>>>> origin/master
         rows.append({
             "Frame": frame_id,
             "X": float(row["X"]) if pd.notna(row["X"]) else np.nan,
@@ -397,11 +379,7 @@ def parse_args():
     parser.add_argument("--frame_h", type=int, default=1080, help="used in CSV-only mode")
     parser.add_argument("--near_dist", type=float, default=NEAR_NET_DIST)
     parser.add_argument("--box_height", type=float, default=BOX_HEIGHT)
-<<<<<<< HEAD
     parser.add_argument("--base_alpha", type=float, default=0.15, help="calibrated alpha for scale = sx + alpha * (sy - sx)")
-=======
-    parser.add_argument("--base_alpha", type=float, default=0.25, help="calibrated alpha for scale = sx + alpha * (sy - sx)")
->>>>>>> origin/master
     parser.add_argument("--scale_alpha", type=float, default=None, help="alias of --base_alpha; kept for old commands")
     parser.add_argument("--no_expand_net_neighbor", action="store_true", help="do not include +/-1 neighboring rows around in-net frames")
     parser.add_argument("--save_debug_video", action="store_true")
@@ -450,8 +428,5 @@ def main():
 
 
 if __name__ == "__main__":
-<<<<<<< HEAD
     main()
-=======
-    main()
->>>>>>> origin/master
+
