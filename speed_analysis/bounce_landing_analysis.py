@@ -24,8 +24,8 @@ from matplotlib.colors import LinearSegmentedColormap
 
 TABLE_W = 274.0
 TABLE_H = 152.5
-GRID_COLS = 6
-GRID_ROWS = 3
+GRID_COLS = 8
+GRID_ROWS = 4
 DPI = 150
 
 OUT_DIR = "runs/"
