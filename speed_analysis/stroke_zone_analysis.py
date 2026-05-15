@@ -1,7 +1,12 @@
+"""Stroke-zone analysis entry point.
+
+This file detects strokes from a TrackNet ball CSV, computes net-zone speed,
+merges landing/bounce results, and optionally writes a visualized MP4.
+"""
+
 import argparse
 import math
 import os
-import shutil
 import subprocess
 from typing import Dict, List, Optional
 
@@ -343,20 +348,57 @@ def compute_fixed_scales(table_corners):
     left_sy = TABLE_H / calc_step(p1[0], p1[1], p4[0], p4[1])
     right_sy = TABLE_H / calc_step(p2[0], p2[1], p3[0], p3[1])
 
-    #return float((top_sx + bottom_sx)/2), float((left_sy + right_sy)/2)
     return float(max(top_sx, bottom_sx)), float(max(left_sy, right_sy))
 
 
-def calc_segment_speed_basic_kmh(x1, y1, x2, y2, fps, sx, sy, dt_frames):
-    sy = sx + 0.8 * (sy - sx)
-    sx = sx + 0.1 * (sy - sx)
+def get_y_depth_factor(ball_y, table_corners, depth_strength=0.0):
+    """Simple y-depth compensation.
+
+    near side: factor = 1.0
+    far side : factor = 1.0 + depth_strength
+
+    The function uses the two table-edge average y positions.
+    It assumes the near side is lower in the image, which is typical for
+    the current side-view setup. To be robust, it simply treats the larger
+    edge-y as near_y and the smaller edge-y as far_y.
+    """
+    if depth_strength is None or float(depth_strength) <= 0:
+        return 1.0
+
+    pts = np.asarray(table_corners, dtype=np.float32)
+    if pts.ndim != 2 or pts.shape[0] < 4:
+        return 1.0
+
+    p1, p2, p3, p4 = pts[:4]
+    edge_y1 = (float(p1[1]) + float(p2[1])) / 2.0
+    edge_y2 = (float(p3[1]) + float(p4[1])) / 2.0
+
+    far_y = min(edge_y1, edge_y2)
+    near_y = max(edge_y1, edge_y2)
+    denom = near_y - far_y
+    if abs(denom) < 1e-6:
+        return 1.0
+
+    # far_ratio: near side -> 0, far side -> 1
+    far_ratio = (near_y - float(ball_y)) / denom
+    far_ratio = float(np.clip(far_ratio, 0.0, 5.0))
+
+    return float(1.0 + float(depth_strength) * far_ratio)
+
+
+def calc_segment_speed_basic_kmh(x1, y1, x2, y2, fps, sx, sy, dt_frames, depth_factor=1.0):
+    # Keep the current project rule: x/y scales are blended differently.
+    #sy = sx + 0.8 * (sy - sx)
+    #sx = sx + 0.1 * (sy - sx)
+    scale = sx + 0.1 * (sy - sx)
+
     dx_cm = (x2 - x1) * sx
     dy_cm = (y2 - y1) * sy
     v_cm_s = math.hypot(dx_cm, dy_cm) / (dt_frames / fps)
-    return float(v_cm_s * 0.036)
+    return float(v_cm_s * 0.036 * float(depth_factor))
 
 
-def make_speed_segment(df, i, j, fps, sx, sy, dt_frames, speed_end_frame, run_start_idx, run_end_idx):
+def make_speed_segment(df, i, j, fps, sx, sy, dt_frames, speed_end_frame, run_start_idx, run_end_idx, table_corners=None, depth_strength=0.0):
     if i < run_start_idx or j > run_end_idx:
         return None
 
@@ -382,14 +424,16 @@ def make_speed_segment(df, i, j, fps, sx, sy, dt_frames, speed_end_frame, run_st
     if x2 <= x1:
         return None
 
-    speed = calc_segment_speed_basic_kmh(x1, y1, x2, y2, fps, sx, sy, dt_frames)
+    mid_y = (y1 + y2) / 2.0
+    depth_factor = get_y_depth_factor(mid_y, table_corners, depth_strength) if table_corners is not None else 1.0
+    speed = calc_segment_speed_basic_kmh(x1, y1, x2, y2, fps, sx, sy, dt_frames, depth_factor=depth_factor)
     if not np.isfinite(speed) or speed > MAX_SPEED_KMH:
         return None
 
     return float(speed), f1, f2
 
 
-def compute_net_zone_speed_for_stroke(df: pd.DataFrame, stroke: Dict, fps: float, table_corners, net_zone_points):
+def compute_net_zone_speed_for_stroke(df: pd.DataFrame, stroke: Dict, fps: float, table_corners, net_zone_points, depth_strength=0.0):
     """
     Compute only net-zone max speed.
     This no longer depends on hit_frame and no longer exports avg/max speed.
@@ -428,30 +472,17 @@ def compute_net_zone_speed_for_stroke(df: pd.DataFrame, stroke: Dict, fps: float
                 speed_end_frame=frame_end,
                 run_start_idx=run_start_idx,
                 run_end_idx=run_end_idx,
+                table_corners=table_corners,
+                depth_strength=depth_strength,
             )
             if seg is not None:
                 speed_candidates.append((speed_type, *seg))
 
         if not speed_candidates:
             continue
-        # max in 3 ways
+
         speed_map = {speed_type: speed for speed_type, speed, _, _ in speed_candidates}
         best_type, best_speed, best_start, best_end = max(speed_candidates, key=lambda item: item[1])
-        '''
-        # avg in 3 ways
-        speed_map = {
-            speed_type: speed
-            for speed_type, speed, _, _ in speed_candidates
-        }'''
-
-        valid_speeds = [speed for _, speed, _, _ in speed_candidates]
-
-        best_speed = float(np.mean(valid_speeds))
-
-        best_type = "avg"
-
-        best_start = min(seg[2] for seg in speed_candidates)
-        best_end = max(seg[3] for seg in speed_candidates)
 
         all_segments.append({
             "frame": frame_id,
@@ -486,6 +517,7 @@ def compute_net_zone_speed_for_stroke(df: pd.DataFrame, stroke: Dict, fps: float
         "net_zone_max_speed_c2f_kmh": max((seg["speed_c2f"] for seg in net_segments if seg["speed_c2f"] is not None), default=None),
         "sx_cm_per_px": sx,
         "sy_cm_per_px": sy,
+        "depth_strength": float(depth_strength),
     }
 
 
@@ -553,6 +585,7 @@ def build_stroke_summary_csv(
     strokes: List[Dict],
     fps: float,
     helper_zone_info: Dict,
+    depth_strength=0.0,
 ) -> pd.DataFrame:
     rows = []
 
@@ -576,7 +609,7 @@ def build_stroke_summary_csv(
             valid = 0
             note = append_note(note, "no_hit")
         elif table_corners is not None and net_zone_points is not None and fps is not None and fps > 0:
-            speed_metrics = compute_net_zone_speed_for_stroke(df, stroke, fps, table_corners, net_zone_points)
+            speed_metrics = compute_net_zone_speed_for_stroke(df, stroke, fps, table_corners, net_zone_points, depth_strength=depth_strength)
             if speed_metrics is None:
                 valid = 0
                 note = append_note(note, "no_clean_speed_segment")
@@ -601,6 +634,7 @@ def build_stroke_summary_csv(
             "net_zone_max_speed_end_frame": value_or_blank(speed_metrics["net_zone_max_speed_end_frame"] if speed_metrics else None),
             "sx_cm_per_px": value_or_blank(speed_metrics["sx_cm_per_px"] if speed_metrics else None),
             "sy_cm_per_px": value_or_blank(speed_metrics["sy_cm_per_px"] if speed_metrics else None),
+            "depth_strength": value_or_blank(speed_metrics["depth_strength"] if speed_metrics else None),
             "valid": valid,
             "note": note,
         }
@@ -716,7 +750,6 @@ def draw_stroke_overlay(frame, df, frame_to_row, frame_id: int, stroke: Dict, su
 
 def build_export_stroke_csv(summary_df: pd.DataFrame) -> pd.DataFrame:
     keep_cols = [
-        "video_id",
         "stroke_id",
         "frame_start",
         "frame_end",
@@ -734,16 +767,16 @@ def build_export_stroke_csv(summary_df: pd.DataFrame) -> pd.DataFrame:
 
 
 def build_export_zone_detail_csv(summary_df_full: pd.DataFrame) -> pd.DataFrame:
-    return keep_columns(summary_df_full, ["video_id", "stroke_id"] + ZONE_OUT_COLS)
+    return keep_columns(summary_df_full, ["stroke_id"] + ZONE_OUT_COLS)
 
 
 def build_export_speed_detail_csv(summary_df_full: pd.DataFrame) -> pd.DataFrame:
     keep_cols = [
-        "video_id", "stroke_id", "frame_start", "frame_end", "bounce_frame", "valid", "note",
+        "stroke_id", "frame_start", "frame_end", "bounce_frame", "valid", "note",
         "net_zone_max_speed_kmh", "net_zone_max_speed_type",
         "net_zone_max_speed_start_frame", "net_zone_max_speed_end_frame",
         "net_zone_max_speed_1f_kmh", "net_zone_max_speed_2f_kmh", "net_zone_max_speed_c2f_kmh",
-        "sx_cm_per_px", "sy_cm_per_px",
+        "sx_cm_per_px", "sy_cm_per_px", "depth_strength",
     ]
     return keep_columns(summary_df_full, keep_cols)
 
@@ -755,78 +788,90 @@ def keep_columns(df: pd.DataFrame, keep_cols: List[str]) -> pd.DataFrame:
             out[col] = ""
     return out[keep_cols]
 
+def calibrate_two_speed_groups(
+    summary_df: pd.DataFrame,
+    speed_col: str = "net_zone_max_speed_kmh",
+    threshold: float = 100.0,
+    min_slow_speed: float = 70.0,
+    max_fast_speed: float = 115.0,
+) -> pd.DataFrame:
+    """
+    將球速分成兩群：
+      - 快球：speed >= threshold，大約 110 上下
+      - 慢球：speed < threshold，大約 90 幾上下
 
-def add_video_id_first(df: pd.DataFrame, video_id: str) -> pd.DataFrame:
-    """Return a copy with video_id as the first column."""
-    out = df.copy()
-    if "video_id" in out.columns:
-        out["video_id"] = video_id
-        cols = ["video_id"] + [c for c in out.columns if c != "video_id"]
-        return out[cols]
-    out.insert(0, "video_id", video_id)
+    做法：
+      1. 算快球平均
+      2. 算慢球平均
+      3. diff = 快球平均 - 慢球平均
+      4. 慢球速度加上 diff 做校正
+
+    會保留原始速度：
+      - net_zone_max_speed_raw_kmh
+      - speed_group
+      - speed_group_fast_avg_kmh
+      - speed_group_slow_avg_kmh
+      - speed_group_correction_kmh
+    """
+
+    out = summary_df.copy()
+
+    if speed_col not in out.columns:
+        print(f"[WARN] speed column not found: {speed_col}")
+        return out
+
+    speed = pd.to_numeric(out[speed_col], errors="coerce")
+
+    # 只拿有效速度來算，避免空值、0、異常值影響平均
+    valid_mask = speed.notna() & (speed > 0)
+
+    # 快球：110上下，這裡用 >=100 分群
+    fast_mask = valid_mask & (speed >= threshold) & (speed <= max_fast_speed)
+
+    # 慢球：90幾上下，這裡用 <100 分群
+    slow_mask = valid_mask & (speed < threshold) & (speed >= min_slow_speed)
+
+    fast_avg = speed[fast_mask].mean()
+    slow_avg = speed[slow_mask].mean()
+
+    # 先保留原始速度
+    raw_col = speed_col.replace("_kmh", "_raw_kmh")
+    out[raw_col] = out[speed_col]
+
+    out["speed_group"] = ""
+    out.loc[fast_mask, "speed_group"] = "fast"
+    out.loc[slow_mask, "speed_group"] = "slow"
+
+    out["speed_group_fast_avg_kmh"] = ""
+    out["speed_group_slow_avg_kmh"] = ""
+    out["speed_group_correction_kmh"] = ""
+
+    if pd.isna(fast_avg) or pd.isna(slow_avg):
+        print("[WARN] cannot calibrate speed groups: fast_avg or slow_avg is NaN")
+        print(f"[WARN] fast_count={int(fast_mask.sum())}, slow_count={int(slow_mask.sum())}")
+        return out
+
+    correction = float(fast_avg - slow_avg)
+
+    out["speed_group_fast_avg_kmh"] = float(fast_avg)
+    out["speed_group_slow_avg_kmh"] = float(slow_avg)
+    out["speed_group_correction_kmh"] = correction
+
+    # 慢球加上兩組平均差
+    corrected_speed = speed.copy()
+    corrected_speed.loc[slow_mask] = corrected_speed.loc[slow_mask] + correction
+
+    # 覆蓋原本輸出的速度欄位
+    out[speed_col] = corrected_speed
+
+    print("[INFO] speed group calibration")
+    print(f"[INFO] fast_count={int(fast_mask.sum())}, fast_avg={fast_avg:.2f}")
+    print(f"[INFO] slow_count={int(slow_mask.sum())}, slow_avg={slow_avg:.2f}")
+    print(f"[INFO] correction={correction:.2f} km/h")
+
     return out
 
-
-def rename_or_copy_output(save_dir: str, old_name: str, new_name: str) -> None:
-    """Rename a generic landing output to a video-specific filename if it exists."""
-    old_path = os.path.join(save_dir, old_name)
-    new_path = os.path.join(save_dir, new_name)
-    if not os.path.exists(old_path):
-        return
-    if os.path.abspath(old_path) == os.path.abspath(new_path):
-        return
-    if os.path.exists(new_path):
-        os.remove(new_path)
-    shutil.move(old_path, new_path)
-    print(f"[儲存] {new_path}")
-
-
-def rewrite_landing_outputs_with_video_id(save_dir: str, base: str, df_land: pd.DataFrame) -> None:
-    """Make every landing output carry the video name/ID.
-
-    landing module originally writes generic filenames:
-      landing_detail.csv, zone_stats.csv, landing_heatmap.png, landing_zones.png
-    This wrapper rewrites/renames them to:
-      {base}_landing_detail.csv, {base}_zone_stats.csv,
-      {base}_landing_heatmap.png, {base}_landing_zones.png
-    and adds video_id as the first CSV column.
-    """
-    os.makedirs(save_dir, exist_ok=True)
-
-    if df_land is not None and not df_land.empty:
-        df_land_out = add_video_id_first(df_land, base)
-        detail_path = os.path.join(save_dir, f"{base}_landing_detail.csv")
-        df_land_out.to_csv(detail_path, index=False, encoding="utf-8-sig")
-        print(f"[儲存] {detail_path}")
-
-        if "in_table" in df_land_out.columns and "zone_label" in df_land_out.columns:
-            stats = (
-                df_land_out[df_land_out["in_table"]]
-                .groupby(["video_id", "zone_label"])
-                .size()
-                .reset_index(name="count")
-                .sort_values(["video_id", "zone_label"])
-            )
-        else:
-            stats = pd.DataFrame(columns=["video_id", "zone_label", "count"])
-
-        stats_path = os.path.join(save_dir, f"{base}_zone_stats.csv")
-        stats.to_csv(stats_path, index=False, encoding="utf-8-sig")
-        print(f"[儲存] {stats_path}")
-
-    # Rename PNG files that the landing module already created.
-    rename_or_copy_output(save_dir, "landing_heatmap.png", f"{base}_landing_heatmap.png")
-    rename_or_copy_output(save_dir, "landing_zones.png", f"{base}_landing_zones.png")
-
-    # Remove generic CSVs to avoid accidentally reading outputs without video_id.
-    for generic_name in ("landing_detail.csv", "zone_stats.csv"):
-        generic_path = os.path.join(save_dir, generic_name)
-        if os.path.exists(generic_path):
-            os.remove(generic_path)
-
-
 LANDING_MERGE_COLS = [
-    "video_id",
     "bounce_frame",
     "ball_px",
     "ball_py",
@@ -941,6 +986,7 @@ def process_single_video(
     helper_table_json=None,
     near_dist=NEAR_NET_DIST,
     box_height=BOX_HEIGHT,
+    depth_strength=0.0,
 ):
     ensure_dir(save_dir)
     df = pd.read_csv(ball_csv)
@@ -990,17 +1036,11 @@ def process_single_video(
             strokes=strokes,
             fps=frame_reader.fps,
             helper_zone_info=helper_zone_info,
+            depth_strength=depth_strength,
         )
-
-        base = os.path.splitext(os.path.basename(video_file))[0] if has_video else strip_csv_suffix(ball_csv)
-        if "video_id" not in summary_df_full.columns:
-            summary_df_full.insert(0, "video_id", base)
-        else:
-            summary_df_full["video_id"] = base
 
         # Landing module detects bounce_frame with the current piecewise trajectory method.
         # It writes landing_detail.csv, landing_heatmap.png, landing_zones.png, and zone_stats.csv.
-        # After it returns, rewrite/rename every landing output with video_id/base name.
         landing_input_df = summary_df_full.copy()
         if "note" in landing_input_df.columns:
             landing_input_df = landing_input_df[
@@ -1008,14 +1048,22 @@ def process_single_video(
             ].copy()
 
         df_land = landing.compute_landings_with_bounce(landing_input_df, df, save_dir=save_dir)
-        rewrite_landing_outputs_with_video_id(save_dir=save_dir, base=base, df_land=df_land)
-
-        if df_land is not None and not df_land.empty:
-            df_land = add_video_id_first(df_land, base)
-
         summary_df_full = merge_landing_results(summary_df_full, df_land)
+
+        # 球速分群校正：
+        # 110上下為快球，90幾為慢球
+        # 先算兩組平均差，再把慢球加上這個差值
+        summary_df_full = calibrate_two_speed_groups(
+            summary_df_full,
+            speed_col="net_zone_max_speed_kmh",
+            threshold=100.0,
+            min_slow_speed=70.0,
+            max_fast_speed=115.0,
+        )
+
         sync_bounce_frames_to_strokes(strokes, summary_df_full)
 
+        base = os.path.splitext(os.path.basename(video_file))[0] if has_video else strip_csv_suffix(ball_csv)
         csv_path = os.path.join(save_dir, f"{base}_stroke_zone.csv")
         zone_detail_csv_path = os.path.join(save_dir, f"{base}_zone_detail.csv")
         speed_detail_csv_path = os.path.join(save_dir, f"{base}_net_zone_speed_detail.csv")
@@ -1062,6 +1110,7 @@ def process_video_root(
     video_codec="h264_nvenc",
     near_dist=NEAR_NET_DIST,
     box_height=BOX_HEIGHT,
+    depth_strength=0.0,
 ):
     search_root = save_root if save_root is not None else video_root
     ball_csv_files = collect_ball_csvs(search_root, csv_suffixes=csv_suffixes)
@@ -1110,6 +1159,7 @@ def process_video_root(
                 helper_table_json=helper_table_json,
                 near_dist=near_dist,
                 box_height=box_height,
+                depth_strength=depth_strength,
             )
         except Exception as e:
             print(f"[ERROR] failed on {video_file}")
@@ -1139,6 +1189,7 @@ def parse_args():
     parser.add_argument("--fps", type=float, default=120.0)
     parser.add_argument("--frame_w", type=int, default=1920)
     parser.add_argument("--frame_h", type=int, default=1080)
+    parser.add_argument("--depth_strength", type=float, default=0.2, help="Y-depth compensation strength. 0=no compensation; 0.10 means far side max +10%, near side unchanged.")
     return parser.parse_args()
 
 
@@ -1164,6 +1215,7 @@ def main():
             video_codec=args.video_codec,
             near_dist=args.near_dist,
             box_height=args.box_height,
+            depth_strength=args.depth_strength,
         )
         return
 
@@ -1190,6 +1242,7 @@ def main():
             helper_table_json=args.helper_table_json,
             near_dist=args.near_dist,
             box_height=args.box_height,
+            depth_strength=args.depth_strength,
         )
         return
 
