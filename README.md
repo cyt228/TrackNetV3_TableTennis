@@ -51,11 +51,6 @@ conda activate tracknetV3
 
 ```bash
 pip install -r requirements.txt
-```
-
-如果需要自行安裝對應 CUDA 的 PyTorch，請依照當前環境的 CUDA 版本到 PyTorch 官網選擇指令。原本 Vast.ai 環境曾使用 nightly CUDA 版本，例如：
-
-```bash
 pip install --pre torch torchvision torchaudio --index-url https://download.pytorch.org/whl/nightly/cu128
 ```
 
@@ -76,6 +71,7 @@ pip install --pre torch torchvision torchaudio --index-url https://download.pyto
 exp/TrackNet_best.pt
 exp/InpaintNet_best.pt
 ```
+[模型下載](https://1drv.ms/u/c/ab3b33d5410e04f3/IQCwzwpuGP6pSpgw0VyyRSCzAa4jTyVFYiFWUgSd8gPeCf0?e=hWQh7G)
 
 ---
 
