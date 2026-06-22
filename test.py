@@ -174,7 +174,7 @@ def select_best_candidate(
     min_area_no_history=6.0,
     min_area_with_history=2.0,
     min_y=150,
-    max_y=900,
+    max_y=1050,
     debug=False,
 ):
     """Select the most reasonable ball candidate from one heatmap frame."""
