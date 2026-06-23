@@ -162,7 +162,15 @@ def has_rightward_motion(
     max_step_th: float = 300.0,
     right_side_x: Optional[float] = None,
 ) -> bool:
-    """Return True only when the ball really turns and reaches the right side."""
+    """Return True once a clear left-to-right turn is observed.
+
+    Important fix:
+    The old version reset ``has_basic_turn`` every time a later smaller X
+    appeared. In 44_8, frame 345-510 contains a valid left-to-right turn
+    around frame 397-409, but later X decreases again before a jump at 510->511.
+    Resetting the flag made that whole candidate look like no_hit, so the code
+    discarded it and incorrectly started the stroke at frame 511.
+    """
     if end_idx <= start_idx:
         return False
 
@@ -170,7 +178,7 @@ def has_rightward_motion(
     min_idx = start_idx
     right_frames = 0
     has_basic_turn = False
-    max_x_after_min = min_x
+    max_x_after_turn = min_x
 
     for i in range(start_idx + 1, end_idx + 1):
         prev = df.iloc[i - 1]
@@ -188,17 +196,15 @@ def has_rightward_motion(
             min_x = x2
             min_idx = i
             right_frames = 0
-            has_basic_turn = False
-            max_x_after_min = x2
+            # Do NOT reset has_basic_turn here. Once a real turn has been
+            # observed, later falling X should not erase that evidence.
             continue
-
-        if i > min_idx:
-            max_x_after_min = max(max_x_after_min, x2)
 
         dx_from_min = x2 - min_x
 
         if i > min_idx and dx_from_min >= min_right_dx:
             right_frames += 1
+            max_x_after_turn = max(max_x_after_turn, x2)
             if right_frames >= min_right_frames:
                 has_basic_turn = True
         else:
@@ -208,7 +214,7 @@ def has_rightward_motion(
     if not has_basic_turn:
         return False
 
-    if right_side_x is not None and max_x_after_min < right_side_x:
+    if right_side_x is not None and max_x_after_turn < right_side_x:
         return False
 
     return True

@@ -148,18 +148,19 @@ def _nullctx():
 # predict()   （內容與原本相同，僅保留）
 # ─────────────────────────────────────────────────────────────────────────────
 
-def predict(indices, y_pred=None, c_pred=None, img_scaler=(1, 1), track_state=None, timer=None):
+def predict(indices, y_pred=None, c_pred=None, img_scaler=(1, 1), track_state=None, timer=None, stale_blank_frames=10):
     if track_state is None:
         track_state = {
             "history": [],
             "miss_count": 0,
             "ignore_stale_until": -1,
             "ignore_stale_pos": None,
+            "stale_blank_until": -1,
         }
 
     MAX_CANDIDATES = 3
     HISTORY_SIZE = 8
-    pred_dict = {'Frame': [], 'X': [], 'Y': [], 'Visibility': []}
+    pred_dict = {'Frame': [], 'X': [], 'Y': [], 'Visibility': [], 'Force_Blank': []}
     batch_size, seq_len = indices.shape[0], indices.shape[1]
 
     with (timer.track("post/to_numpy") if timer else _nullctx()):
@@ -176,7 +177,19 @@ def predict(indices, y_pred=None, c_pred=None, img_scaler=(1, 1), track_state=No
         for f in range(seq_len):
             f_i = indices[n][f][1]
             if f_i != prev_f_i:
-                if c_pred is not None:
+                force_blank = 0
+
+                # Strong stale-ball blanking for TrackNet heatmap stage.
+                # If a stale ball was detected recently, do not select any candidate
+                # in this frame. This prevents net-stop / stuck-ball remnants from
+                # being written into the ball CSV or filled again by InpaintNet.
+                if y_pred is not None and int(f_i) <= int(track_state.get("stale_blank_until", -1)):
+                    cx_pred, cy_pred = 0, 0
+                    force_blank = 1
+                    track_state["history"] = []
+                    track_state["miss_count"] = 0
+
+                elif c_pred is not None:
                     c_p = c_pred[n][f]
                     cx_pred = int(c_p[0] * WIDTH * img_scaler[0])
                     cy_pred = int(c_p[1] * HEIGHT * img_scaler[1])
@@ -221,31 +234,46 @@ def predict(indices, y_pred=None, c_pred=None, img_scaler=(1, 1), track_state=No
                               f"history_len={len(track_state['history'])}, "
                               f"last_valid={last_valid}")
                         if reset_reason == "stale_ball" and last_valid is not None:
-                            track_state["ignore_stale_until"] = int(f_i) + 80
-                            track_state["ignore_stale_pos"] = last_valid
+                            blank_n = int(max(0, stale_blank_frames))
+                            if blank_n > 0:
+                                # Blank the current frame and the next blank_n-1 frames.
+                                track_state["stale_blank_until"] = int(f_i) + blank_n - 1
+                                track_state["ignore_stale_until"] = int(f_i) + 80
+                                track_state["ignore_stale_pos"] = last_valid
+                                track_state["history"] = []
+                                track_state["miss_count"] = 0
+                                cx_pred, cy_pred = 0, 0
+                                force_blank = 1
+                                print(f"[stale_blank] frame={f_i}, blank_until={track_state['stale_blank_until']}, "
+                                      f"frames={blank_n}, stale_pos={last_valid}")
 
-                    select_history    = [] if need_reset else track_state["history"]
-                    select_miss_count = 0  if need_reset else track_state["miss_count"]
+                    if force_blank:
+                        chosen = None
+                    else:
+                        select_history    = [] if need_reset else track_state["history"]
+                        select_miss_count = 0  if need_reset else track_state["miss_count"]
 
-                    with (timer.track("post/stale_filter") if timer else _nullctx()):
-                        if (track_state.get("ignore_stale_pos") is not None and
-                                int(f_i) <= track_state.get("ignore_stale_until", -1)):
-                            sx, sy = track_state["ignore_stale_pos"]
-                            filtered = [c for c in scaled_candidates
-                                        if not (abs(c["cx"]-sx) <= 80 and abs(c["cy"]-sy) <= 50)]
-                            if len(filtered) != len(scaled_candidates):
-                                print(f"[ignore_stale] frame={f_i}, ignore_pos=({sx},{sy}), "
-                                      f"before={len(scaled_candidates)}, after={len(filtered)}")
-                            scaled_candidates = filtered
+                        with (timer.track("post/stale_filter") if timer else _nullctx()):
+                            if (track_state.get("ignore_stale_pos") is not None and
+                                    int(f_i) <= track_state.get("ignore_stale_until", -1)):
+                                sx, sy = track_state["ignore_stale_pos"]
+                                filtered = [c for c in scaled_candidates
+                                            if not (abs(c["cx"]-sx) <= 80 and abs(c["cy"]-sy) <= 50)]
+                                if len(filtered) != len(scaled_candidates):
+                                    print(f"[ignore_stale] frame={f_i}, ignore_pos=({sx},{sy}), "
+                                          f"before={len(scaled_candidates)}, after={len(filtered)}")
+                                scaled_candidates = filtered
 
-                    with (timer.track("post/select_best") if timer else _nullctx()):
-                        chosen = select_best_candidate(
-                            candidates=scaled_candidates,
-                            history=select_history,
-                            miss_count=select_miss_count
-                        )
+                        with (timer.track("post/select_best") if timer else _nullctx()):
+                            chosen = select_best_candidate(
+                                candidates=scaled_candidates,
+                                history=select_history,
+                                miss_count=select_miss_count
+                            )
 
-                    if chosen is None:
+                    if force_blank:
+                        pass
+                    elif chosen is None:
                         cx_pred, cy_pred = 0, 0
                         if need_reset:
                             track_state["history"] = []
@@ -275,6 +303,7 @@ def predict(indices, y_pred=None, c_pred=None, img_scaler=(1, 1), track_state=No
                 pred_dict['X'].append(cx_pred)
                 pred_dict['Y'].append(cy_pred)
                 pred_dict['Visibility'].append(vis_pred)
+                pred_dict['Force_Blank'].append(int(force_blank))
                 prev_f_i = f_i
             else:
                 break
@@ -303,6 +332,8 @@ def main():
     parser.add_argument('--large_video',    action='store_true', default=False)
     parser.add_argument('--output_video',   action='store_true', default=False)
     parser.add_argument('--traj_len',       type=int, default=8)
+    parser.add_argument('--stale_blank_frames', type=int, default=10,
+                        help='When stale_ball is detected in TrackNet postprocess, force current and next N-1 frames to Visibility=0. Use 0 to disable.')
     parser.add_argument('--video_codec', type=str, default='h264_nvenc',
                     choices=['h264_nvenc', 'libx264'],
                     help='Output video codec. h264_nvenc needs NVIDIA GPU.')
@@ -388,12 +419,13 @@ def main():
         cap.release()
 
         tracknet_pred_dict = {
-            'Frame': [], 'X': [], 'Y': [], 'Visibility': [], 'Inpaint_Mask': [],
+            'Frame': [], 'X': [], 'Y': [], 'Visibility': [], 'Force_Blank': [], 'Inpaint_Mask': [],
             'Img_scaler': (w_scaler, h_scaler), 'Img_shape': (w, h)
         }
         track_state = {
             "history": [], "miss_count": 0,
             "ignore_stale_until": -1, "ignore_stale_pos": None,
+            "stale_blank_until": -1,
         }
 
         # ════════════════════════════════════════════════════════════════════
@@ -467,7 +499,7 @@ def main():
                 with timer.track("1_tracknet/post_predict"):
                     tmp_pred, track_state = predict(
                         i, y_pred=y_pred, img_scaler=img_scaler,
-                        track_state=track_state, timer=timer)
+                        track_state=track_state, timer=timer, stale_blank_frames=args.stale_blank_frames)
                     for key in tmp_pred:
                         tracknet_pred_dict[key].extend(tmp_pred[key])
 
@@ -519,7 +551,7 @@ def main():
                 with timer.track("1_tracknet/post_predict"):
                     tmp_pred, track_state = predict(
                         ensemble_i, y_pred=ensemble_y_pred, img_scaler=img_scaler,
-                        track_state=track_state, timer=timer)
+                        track_state=track_state, timer=timer, stale_blank_frames=args.stale_blank_frames)
                     for key in tmp_pred:
                         tracknet_pred_dict[key].extend(tmp_pred[key])
 
@@ -538,7 +570,16 @@ def main():
                     max_gap=14, border_margin_x=160, max_angle_diff=100.0,
                     min_valid_run=1, angle_check_min_gap=14)
 
-            inpaint_pred_dict = {'Frame': [], 'X': [], 'Y': [], 'Visibility': []}
+                # Do not let InpaintNet refill frames that were intentionally
+                # blanked by stale_ball logic.
+                if 'Force_Blank' in tracknet_pred_dict:
+                    force_blank_arr = np.asarray(tracknet_pred_dict['Force_Blank'], dtype=int)
+                    inpaint_mask_arr = np.asarray(tracknet_pred_dict['Inpaint_Mask'], dtype=int)
+                    if len(force_blank_arr) == len(inpaint_mask_arr):
+                        inpaint_mask_arr[force_blank_arr == 1] = 0
+                        tracknet_pred_dict['Inpaint_Mask'] = inpaint_mask_arr.tolist()
+
+            inpaint_pred_dict = {'Frame': [], 'X': [], 'Y': [], 'Visibility': [], 'Force_Blank': []}
 
             with timer.track("2_inpaint/dataset_init"):
                 if args.eval_mode == 'nonoverlap':
@@ -631,6 +672,9 @@ def main():
         # 儲存結果
         # ════════════════════════════════════════════════════════════════════
         pred_dict = inpaint_pred_dict if inpaintnet is not None else tracknet_pred_dict
+        if inpaintnet is not None and 'Force_Blank' in tracknet_pred_dict:
+            if len(tracknet_pred_dict['Force_Blank']) == len(pred_dict.get('Frame', [])):
+                pred_dict['Force_Blank'] = list(tracknet_pred_dict['Force_Blank'])
 
         if 'Inpaint_Mask' not in pred_dict:
             pred_dict['Inpaint_Mask'] = (tracknet_pred_dict.get('Inpaint_Mask')
